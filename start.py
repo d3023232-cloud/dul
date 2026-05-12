@@ -9,8 +9,8 @@ from aiogram.fsm.context import FSMContext
 from database import db
 from states import MainMenu
 from keyboards import main_menu_kb, subscribe_kb, back_to_menu_kb
-from helpers import generate_referral_code, should_reset_daily, get_today_msk
-from config import CHANNEL_ID, CHANNEL_LINK
+from utils.helpers import generate_referral_code, should_reset_daily, get_today_msk
+from config import CHANNEL_ID, CHANNEL_LINK, START_COINS, RECOVERY_INTERVAL_MINUTES
 
 router = Router()
 
@@ -23,26 +23,22 @@ async def get_welcome_text() -> str:
     limit_default = await db.get_economy_setting_int("daily_recovery_limit_default", 5)
     limit_vip = await db.get_economy_setting_int("daily_recovery_limit_vip", 15)
 
-    return f"""
-🤠 <b>Добро пожаловать в Дуэль Бот!</b> 🤠
-
-Здесь ты можешь бросить вызов другим ковбоям на перестрелку!
-
-📜 <b>Правила:</b>
-• У каждого игрока <b>{start_coins} монет</b>
-• Дуэль стоит <b>{duel_cost} монету</b>
-• При балансе <b>0</b> — восстановление <b>1 монеты</b> каждые <b>{recovery} минут</b>
-• Обычный игрок: <b>{limit_default} восстановлений</b> в сутки
-• VIP игрок: <b>{limit_vip} восстановлений</b> в сутки
-• Сброс лимита каждый день в <b>00:00 по МСК</b>
-
-💰 <b>Донат:</b>
-• VIP Premium — увеличивает лимит восстановлений
-• Сброс лимита — сбрасывает счётчик восстановлений
-• Покупка монет — 5 DC = 1 монета
-
-⚔️ <b>Готов к дуэли?</b> Выбирай соперника и стреляй первым!
-"""
+    return (
+        "🤠 <b>Добро пожаловать в Дуэль Бот!</b> 🤠\n\n"
+        "Здесь ты можешь бросить вызов другим ковбоям на перестрелку!\n\n"
+        "📜 <b>Правила:</b>\n"
+        f"• У каждого игрока <b>{start_coins} монет</b>\n"
+        f"• Дуэль стоит <b>{duel_cost} монету</b>\n"
+        f"• При балансе <b>0</b> — восстановление <b>1 монеты</b> каждые <b>{recovery} минут</b>\n"
+        f"• Обычный игрок: <b>{limit_default} восстановлений</b> в сутки\n"
+        f"• VIP игрок: <b>{limit_vip} восстановлений</b> в сутки\n"
+        "• Сброс лимита каждый день в <b>00:00 по МСК</b>\n\n"
+        "💰 <b>Донат:</b>\n"
+        "• VIP Premium — увеличивает лимит восстановлений\n"
+        "• Сброс лимита — сбрасывает счётчик восстановлений\n"
+        "• Покупка монет — 5 DC = 1 монета\n\n"
+        "⚔️ <b>Готов к дуэли?</b> Выбирай соперника и стреляй первым!"
+    )
 
 
 async def check_subscription(bot: Bot, user_id: int) -> bool:
@@ -60,11 +56,9 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     username = message.from_user.username or ""
     first_name = message.from_user.first_name or "Игрок"
 
-    # Проверяем, есть ли пользователь в БД
     user = await db.get_user(user_id)
 
     if not user:
-        # Новый пользователь — проверяем рефералку
         args = message.text.split() if message.text else []
         referred_by = None
 
@@ -73,13 +67,12 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             ref_user = await db.get_user_by_referral(ref_code)
             if ref_user and ref_user["telegram_id"] != user_id:
                 referred_by = ref_user["telegram_id"]
-                # Награждаем пригласившего
                 await db.add_coins(referred_by, 2, f"Реферал {user_id}")
                 await db.add_donate(referred_by, 1, f"Реферал {user_id}")
                 await db.create_referral_reward(referred_by, user_id)
 
         ref_code = generate_referral_code(user_id)
-        start_coins = await db.get_economy_setting_int('start_coins', 10)
+        start_coins = await db.get_economy_setting_int("start_coins", 10)
         await db.create_user(user_id, username, first_name, ref_code, referred_by, start_coins)
 
         if referred_by:
@@ -87,33 +80,26 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     else:
         await db.update_username(user_id, username, first_name)
 
-    # Проверяем подписку
     is_subscribed = await check_subscription(bot, user_id)
     await db.set_subscribed(user_id, is_subscribed)
 
     if not is_subscribed:
         await message.answer(
-            f"👋 <b>Привет, {first_name}!</b>
-
-"
+            f"👋 <b>Привет, {first_name}!</b>\n\n"
             f"Для использования бота необходимо подписаться на наш канал:",
             reply_markup=subscribe_kb(CHANNEL_LINK),
             parse_mode="HTML"
         )
         return
 
-    # Проверяем сброс дневного лимита
     user = await db.get_user(user_id)
     if user and should_reset_daily(user.get("last_reset_date")):
         await db.reset_recovery_count(user_id)
         await db.set_last_reset_date(user_id, get_today_msk())
 
     await state.set_state(MainMenu.main)
-    await message.answer(
-        await get_welcome_text(),
-        reply_markup=main_menu_kb(),
-        parse_mode="HTML"
-    )
+    welcome = await get_welcome_text()
+    await message.answer(welcome, reply_markup=main_menu_kb(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "check_subscribe")
@@ -125,17 +111,14 @@ async def check_subscribe_callback(callback: CallbackQuery, state: FSMContext, b
         await db.set_subscribed(user_id, True)
         await db.update_username(user_id, callback.from_user.username or "", callback.from_user.first_name or "")
 
-        # Проверяем сброс дневного лимита
         user = await db.get_user(user_id)
         if user and should_reset_daily(user.get("last_reset_date")):
             await db.reset_recovery_count(user_id)
             await db.set_last_reset_date(user_id, get_today_msk())
 
         await state.set_state(MainMenu.main)
-        await callback.message.edit_text(
-            await get_welcome_text(),
-            parse_mode="HTML"
-        )
+        welcome = await get_welcome_text()
+        await callback.message.edit_text(welcome, parse_mode="HTML")
         await callback.message.answer(
             "✅ Доступ открыт! Выбирай действие:",
             reply_markup=main_menu_kb()
@@ -148,9 +131,7 @@ async def check_subscribe_callback(callback: CallbackQuery, state: FSMContext, b
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(event, state: FSMContext):
     await state.set_state(MainMenu.main)
-    text = "🏠 <b>Главное меню</b>
-
-Выбирай действие, ковбой!"
+    text = "🏠 <b>Главное меню</b>\n\nВыбирай действие, ковбой!"
 
     if isinstance(event, CallbackQuery):
         await event.message.edit_text(text, parse_mode="HTML")
