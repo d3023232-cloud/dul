@@ -3,10 +3,7 @@
 import aiosqlite
 import datetime
 from typing import Optional, List, Dict, Any
-from config import (
-    START_COINS, DAILY_RECOVERY_LIMIT_DEFAULT, 
-    DAILY_RECOVERY_LIMIT_VIP, RECOVERY_INTERVAL_SECONDS
-)
+from config import START_COINS
 
 DB_PATH = "duel_bot.db"
 
@@ -232,8 +229,10 @@ class Database:
     async def get_recovery_limit(self, telegram_id: int) -> int:
         user = await self.get_user(telegram_id)
         if not user:
-            return DAILY_RECOVERY_LIMIT_DEFAULT
-        return DAILY_RECOVERY_LIMIT_VIP if user["is_vip"] else DAILY_RECOVERY_LIMIT_DEFAULT
+            return await self.get_economy_setting_int("daily_recovery_limit_default", 5)
+        limit_default = await self.get_economy_setting_int("daily_recovery_limit_default", 5)
+        limit_vip = await self.get_economy_setting_int("daily_recovery_limit_vip", 15)
+        return limit_vip if user["is_vip"] else limit_default
 
     async def can_recover(self, telegram_id: int) -> bool:
         user = await self.get_user(telegram_id)
