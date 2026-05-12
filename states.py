@@ -10,6 +10,7 @@ class MainMenu(StatesGroup):
 class DuelState(StatesGroup):
     selecting_opponent = State()
     waiting_response = State()
+    entering_username = State()
     in_animation = State()
     result = State()
 

@@ -10,7 +10,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="⚔️ Дуэль"), KeyboardButton(text="👤 Профиль")],
             [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🔗 Рефералка")],
-            [KeyboardButton(text="📊 Топ игроков")],
+            [KeyboardButton(text="📊 Топ игроков"), KeyboardButton(text="💰 Топ по монетам")],
         ],
         resize_keyboard=True
     )
@@ -144,6 +144,7 @@ def duel_opponent_select_kb(users: list, page: int = 0, per_page: int = 5) -> In
     if nav:
         buttons.append(nav)
 
+    buttons.append([InlineKeyboardButton(text="✏️ Пригласить по @username", callback_data="duel_by_username")])
     buttons.append([InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)

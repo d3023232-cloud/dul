@@ -10,7 +10,7 @@ from database import db
 from states import MainMenu, DuelState
 from keyboards import duel_opponent_select_kb, duel_invite_kb, main_menu_kb, back_to_menu_kb
 from helpers import format_user_name, get_duel_frames
-
+from config import RECOVERY_INTERVAL_MINUTES
 
 router = Router()
 
@@ -55,7 +55,7 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
                     reply_markup=main_menu_kb()
                 )
             else:
-                next_recovery = await db.get_economy_setting_int('recovery_interval_minutes', 6)
+                next_recovery = RECOVERY_INTERVAL_MINUTES
                 await message.answer(
                     f"❌ <b>Недостаточно монет!</b>\n\n"
                     f"Баланс: {user['balance_coins']} монет\n"
@@ -72,7 +72,7 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
     if not opponents:
         await message.answer(
             "😕 <b>Пока нет доступных соперников!</b>\n\n"
-            "Пригласите друзей по реферальной ссылке!",
+            "Пригласите друзей по реферальной ссылке или введите @username!",
             reply_markup=main_menu_kb()
         )
         return
@@ -80,7 +80,8 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(DuelState.selecting_opponent)
     await message.answer(
         "🎯 <b>Выберите соперника для дуэли:</b>\n\n"
-        f"💰 Ваш баланс: {user['balance_coins']} монет",
+        f"💰 Ваш баланс: {user['balance_coins']} монет\n\n"
+        "Или пригласите друга по @username:",
         reply_markup=duel_opponent_select_kb(opponents)
     )
 
@@ -98,8 +99,181 @@ async def duel_pagination(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ====== ПРИГЛАШЕНИЕ ПО ЮЗЕРНЕЙМУ ======
+
+@router.callback_query(F.data == "duel_by_username")
+async def duel_by_username_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(DuelState.entering_username)
+    await callback.message.edit_text(
+        "✏️ <b>Пригласить на дуэль по @username</b>\n\n"
+        "Введите юзернейм соперника (например: @ivan):\n\n"
+        "⚠️ Соперник должен быть зарегистрирован в боте и подписан на канал.",
+        reply_markup=back_to_menu_kb(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(DuelState.entering_username)
+async def duel_by_username_process(message: Message, state: FSMContext, bot: Bot):
+    username_input = message.text.strip().lstrip("@")
+    challenger_id = message.from_user.id
+
+    if not username_input:
+        await message.answer("❌ Введите корректный @username!")
+        return
+
+    # Ищем пользователя по username
+    all_users = await db.get_all_users()
+    opponent = None
+    for u in all_users:
+        if u.get("username") and u["username"].lower() == username_input.lower():
+            opponent = u
+            break
+
+    if not opponent:
+        await message.answer(
+            f"❌ Игрок <b>@{username_input}</b> не найден!\n\n"
+            f"Убедитесь, что он:\n"
+            f"• Зарегистрирован в боте\n"
+            f"• Имеет установленный @username\n"
+            f"• Подписан на канал",
+            reply_markup=back_to_menu_kb(),
+            parse_mode="HTML"
+        )
+        await state.set_state(DuelState.selecting_opponent)
+        return
+
+    opponent_id = opponent["telegram_id"]
+
+    if opponent_id == challenger_id:
+        await message.answer("❌ Нельзя вызвать самого себя!")
+        return
+
+    if not opponent.get("subscribed_channel"):
+        await message.answer(
+            f"❌ <b>@{username_input}</b> не подписан на канал и не может участвовать в дуэлях.",
+            reply_markup=back_to_menu_kb(),
+            parse_mode="HTML"
+        )
+        await state.set_state(DuelState.selecting_opponent)
+        return
+
+    challenger = await db.get_user(challenger_id)
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+
+    if challenger["balance_coins"] < duel_cost:
+        await message.answer("❌ Недостаточно монет!")
+        await state.set_state(MainMenu.main)
+        return
+
+    # Запускаем дуэль
+    await state.set_state(MainMenu.main)
+    await send_duel_invite(bot, challenger_id, opponent_id, message, state)
+
+
+# ====== ОТПРАВКА ПРИГЛАШЕНИЯ ======
+
+async def send_duel_invite(bot: Bot, challenger_id: int, opponent_id: int, message_or_callback, state: FSMContext):
+    """Отправляет приглашение на дуэль с таймаутом 30 секунд"""
+
+    challenger = await db.get_user(challenger_id)
+    opponent = await db.get_user(opponent_id)
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+
+    # Списываем монету
+    await db.remove_coins(challenger_id, duel_cost, "Ставка в дуэли")
+
+    # Создаём дуэль в БД
+    duel_id = await db.create_duel(challenger_id, opponent_id, duel_cost)
+
+    challenger_name = format_user_name(challenger)
+    opponent_name = format_user_name(opponent)
+
+    # Отправляем сообщение сопернику
+    msg = await bot.send_message(
+        opponent_id,
+        f"⚔️ <b>Вас вызывают на дуэль!</b>\n\n"
+        f"👤 <b>{challenger_name}</b> бросает вам вызов!\n\n"
+        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
+        f"⏳ У вас есть <b>30 секунд</b> на ответ!",
+        reply_markup=duel_invite_kb(duel_id),
+        parse_mode="HTML"
+    )
+
+    # Отправляем сообщение вызывающему
+    wait_msg = await bot.send_message(
+        challenger_id,
+        f"⚔️ <b>Заявка отправлена!</b>\n\n"
+        f"Вы бросили вызов <b>{opponent_name}</b>\n"
+        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
+        f"⏳ Ждём ответа соперника в течение <b>30 секунд</b>...",
+        parse_mode="HTML"
+    )
+
+    # Анимация точек для соперника
+    dots_msg = await bot.send_message(opponent_id, "Ждём ответа.")
+
+    # Ждём 30 секунд с анимацией
+    start_time = asyncio.get_event_loop().time()
+    timeout = 30
+
+    while True:
+        elapsed = asyncio.get_event_loop().time() - start_time
+        if elapsed >= timeout:
+            break
+
+        # Обновляем точки каждые 0.5 сек
+        for dots in [".", "..", "..."]:
+            remaining = int(timeout - elapsed)
+            try:
+                await dots_msg.edit_text(f"⏳ Ждём ответа{dots} ({remaining} сек)")
+            except:
+                pass
+            await asyncio.sleep(0.5)
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
+                break
+
+    # Проверяем, не истекло ли время
+    duel = await db.get_duel(duel_id)
+    if duel and duel["status"] == "pending":
+        await db.update_duel_status(duel_id, "expired")
+        await db.add_coins(challenger_id, duel_cost, "Возврат ставки (таймаут)")
+
+        # Сообщение сопернику
+        try:
+            await dots_msg.edit_text("⏰ <b>Время вышло!</b> Заявка истекла.")
+        except:
+            pass
+        try:
+            await msg.edit_text(
+                f"⚔️ <b>Дуэль отменена</b>\n\n"
+                f"{challenger_name} не дождался ответа.\n"
+                f"💰 Ставка возвращена.",
+                reply_markup=None
+            )
+        except:
+            pass
+
+        # Сообщение вызывающему
+        await bot.send_message(
+            challenger_id,
+            f"😏 <b>{opponent_name} испугался!</b>\n\n"
+            f"Соперник не ответил на вызов в течение 30 секунд.\n"
+            f"💰 {duel_cost} монета возвращена.\n\n"
+            f"🔥 Попробуйте вызвать кого-то другого!",
+            reply_markup=duel_opponent_select_kb(await db.get_all_users())
+        )
+
+        try:
+            await wait_msg.delete()
+        except:
+            pass
+
+
 @router.callback_query(F.data.startswith("duel_challenge:"))
-async def send_duel_invite(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def send_duel_invite_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
     challenger_id = callback.from_user.id
     opponent_id = int(callback.data.split(":")[1])
 
@@ -120,53 +294,9 @@ async def send_duel_invite(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await callback.answer("❌ Недостаточно монет!", show_alert=True)
         return
 
-    # Списываем монету сразу
-    await db.remove_coins(challenger_id, duel_cost, "Ставка в дуэли")
-
-    # Создаём дуэль в БД
-    duel_id = await db.create_duel(challenger_id, opponent_id, duel_cost)
-
-    # Отправляем приглашение оппоненту с анимацией точек
-    challenger_name = format_user_name(challenger)
-
-    msg = await bot.send_message(
-        opponent_id,
-        f"⚔️ <b>Вас вызывают на дуэль!</b>\n\n"
-        f"👤 <b>{challenger_name}</b> бросает вам вызов!\n\n"
-        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
-        f"⏳ Ожидаем ответа...",
-        reply_markup=duel_invite_kb(duel_id),
-        parse_mode="HTML"
-    )
-
-    # Анимация точек
-    dots_msg = await bot.send_message(opponent_id, "Ждём ответа.")
-
-    for _ in range(6):  # 6 циклов = ~9 секунд
-        for dots in [".", "..", "..."]:
-            await dots_msg.edit_text(f"Ждём ответа{dots}")
-            await asyncio.sleep(0.5)
-
-    # Проверяем, не истекло ли время
-    duel = await db.get_duel(duel_id)
-    if duel and duel["status"] == "pending":
-        await db.update_duel_status(duel_id, "expired")
-        await db.add_coins(challenger_id, duel_cost, "Возврат ставки (таймаут)")
-        await dots_msg.edit_text("⏰ <b>Время вышло!</b> Соперник не ответил.")
-        await msg.edit_text(
-            f"⚔️ <b>Дуэль отменена</b>\n\n"
-            f"{challenger_name} не дождался ответа.\n"
-            f"💰 Ставка возвращена.",
-            reply_markup=None
-        )
-        await bot.send_message(
-            challenger_id,
-            f"❌ <b>{format_user_name(opponent)}</b> не принял вызов.\n"
-            f"💰 {duel_cost} монета возвращена.",
-            reply_markup=main_menu_kb()
-        )
-
+    await callback.answer("⚔️ Заявка отправлена!")
     await state.set_state(MainMenu.main)
+    await send_duel_invite(bot, challenger_id, opponent_id, callback, state)
 
 
 @router.callback_query(F.data.startswith("duel_accept:"))
