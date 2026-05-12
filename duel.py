@@ -37,41 +37,29 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
         if can_recover:
             await db.recover_coin(user_id)
             user = await db.get_user(user_id)
+            recovery_limit = await db.get_recovery_limit(user_id)
             await message.answer(
-                f"💰 <b>Восстановление!</b>
-
-"
+                f"💰 <b>Восстановление!</b>\n\n"
                 f"Вам начислена 1 монета (восстановление {user['recoveries_today']}/"
-                f"{await db.get_recovery_limit(user_id)}).
-"
+                f"{recovery_limit}).\n"
                 f"Теперь у вас {user['balance_coins']} монет."
             )
         else:
             limit = await db.get_recovery_limit(user_id)
             if user["recoveries_today"] >= limit:
                 await message.answer(
-                    f"❌ <b>Монеты закончились!</b>
-
-"
-                    f"Вы использовали все восстановления на сегодня ({limit}/{limit}).
-"
-                    f"Следующее обновление в 00:00 по МСК.
-
-"
+                    f"❌ <b>Монеты закончились!</b>\n\n"
+                    f"Вы использовали все восстановления на сегодня ({limit}/{limit}).\n"
+                    f"Следующее обновление в 00:00 по МСК.\n\n"
                     f"💎 Можно купить монеты в магазине или приобрести VIP!",
                     reply_markup=main_menu_kb()
                 )
             else:
                 next_recovery = RECOVERY_INTERVAL_MINUTES
                 await message.answer(
-                    f"❌ <b>Недостаточно монет!</b>
-
-"
-                    f"Баланс: {user['balance_coins']} монет
-"
-                    f"Следующее восстановление через {next_recovery} минут.
-
-"
+                    f"❌ <b>Недостаточно монет!</b>\n\n"
+                    f"Баланс: {user['balance_coins']} монет\n"
+                    f"Следующее восстановление через {next_recovery} минут.\n\n"
                     f"💎 Или купите монеты в магазине!",
                     reply_markup=main_menu_kb()
                 )
@@ -83,9 +71,7 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
 
     if not opponents:
         await message.answer(
-            "😕 <b>Пока нет доступных соперников!</b>
-
-"
+            "😕 <b>Пока нет доступных соперников!</b>\n\n"
             "Пригласите друзей по реферальной ссылке!",
             reply_markup=main_menu_kb()
         )
@@ -93,9 +79,7 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
 
     await state.set_state(DuelState.selecting_opponent)
     await message.answer(
-        "🎯 <b>Выберите соперника для дуэли:</b>
-
-"
+        "🎯 <b>Выберите соперника для дуэли:</b>\n\n"
         f"💰 Ваш баланс: {user['balance_coins']} монет",
         reply_markup=duel_opponent_select_kb(opponents)
     )
@@ -130,30 +114,26 @@ async def send_duel_invite(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await callback.answer("❌ Ошибка!", show_alert=True)
         return
 
-    if challenger["balance_coins"] < DUEL_COST:
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+
+    if challenger["balance_coins"] < duel_cost:
         await callback.answer("❌ Недостаточно монет!", show_alert=True)
         return
 
-    # Списываем монету сразу (или можно после согласия — но лучше сразу, чтобы не было обмана)
+    # Списываем монету сразу
     await db.remove_coins(challenger_id, duel_cost, "Ставка в дуэли")
 
     # Создаём дуэль в БД
-    duel_id = await db.create_duel(challenger_id, opponent_id, DUEL_COST)
+    duel_id = await db.create_duel(challenger_id, opponent_id, duel_cost)
 
     # Отправляем приглашение оппоненту с анимацией точек
     challenger_name = format_user_name(challenger)
 
     msg = await bot.send_message(
         opponent_id,
-        f"⚔️ <b>Вас вызывают на дуэль!</b>
-
-"
-        f"👤 <b>{challenger_name}</b> бросает вам вызов!
-
-"
-        f"💰 Ставка: <b>{DUEL_COST} монета</b>
-
-"
+        f"⚔️ <b>Вас вызывают на дуэль!</b>\n\n"
+        f"👤 <b>{challenger_name}</b> бросает вам вызов!\n\n"
+        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
         f"⏳ Ожидаем ответа...",
         reply_markup=duel_invite_kb(duel_id),
         parse_mode="HTML"
@@ -174,18 +154,14 @@ async def send_duel_invite(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await db.add_coins(challenger_id, duel_cost, "Возврат ставки (таймаут)")
         await dots_msg.edit_text("⏰ <b>Время вышло!</b> Соперник не ответил.")
         await msg.edit_text(
-            f"⚔️ <b>Дуэль отменена</b>
-
-"
-            f"{challenger_name} не дождался ответа.
-"
+            f"⚔️ <b>Дуэль отменена</b>\n\n"
+            f"{challenger_name} не дождался ответа.\n"
             f"💰 Ставка возвращена.",
             reply_markup=None
         )
         await bot.send_message(
             challenger_id,
-            f"❌ <b>{format_user_name(opponent)}</b> не принял вызов.
-"
+            f"❌ <b>{format_user_name(opponent)}</b> не принял вызов.\n"
             f"💰 {duel_cost} монета возвращена.",
             reply_markup=main_menu_kb()
         )
@@ -212,6 +188,7 @@ async def accept_duel(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Проверяем баланс оппонента
     opponent = await db.get_user(opponent_id)
     duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+
     if opponent["balance_coins"] < duel_cost:
         await callback.answer("❌ У вас недостаточно монет!", show_alert=True)
         return
@@ -222,9 +199,7 @@ async def accept_duel(callback: CallbackQuery, state: FSMContext, bot: Bot):
     # Обновляем статус
     await db.update_duel_status(duel_id, "active")
 
-    await callback.message.edit_text("✅ <b>Вы приняли вызов!</b>
-
-Дуэль начинается...")
+    await callback.message.edit_text("✅ <b>Вы приняли вызов!</b>\n\nДуэль начинается...")
 
     # Запускаем анимацию дуэли для обоих
     await run_duel_animation(bot, challenger_id, opponent_id, duel_id)
@@ -244,6 +219,7 @@ async def decline_duel(callback: CallbackQuery, bot: Bot):
 
     challenger_id = duel["challenger_id"]
     challenger = await db.get_user(challenger_id)
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
 
     # Возвращаем ставку
     await db.add_coins(challenger_id, duel_cost, "Возврат ставки (отказ)")
@@ -252,8 +228,7 @@ async def decline_duel(callback: CallbackQuery, bot: Bot):
     await callback.message.edit_text("❌ <b>Вы отклонили вызов.</b>")
     await bot.send_message(
         challenger_id,
-        f"❌ <b>{format_user_name(await db.get_user(opponent_id))}</b> отклонил ваш вызов.
-"
+        f"❌ <b>{format_user_name(await db.get_user(opponent_id))}</b> отклонил ваш вызов.\n"
         f"💰 {duel_cost} монета возвращена.",
         reply_markup=main_menu_kb()
     )
@@ -263,21 +238,16 @@ async def decline_duel(callback: CallbackQuery, bot: Bot):
 async def run_duel_animation(bot: Bot, challenger_id: int, opponent_id: int, duel_id: int):
     """Анимация перестрелки для обоих игроков"""
     frames = get_duel_frames()
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
 
     # Отправляем начальное сообщение обоим
-    msg_ch = await bot.send_message(challenger_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>
-
-" + frames[0], parse_mode="HTML")
-    msg_op = await bot.send_message(opponent_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>
-
-" + frames[0], parse_mode="HTML")
+    msg_ch = await bot.send_message(challenger_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n" + frames[0], parse_mode="HTML")
+    msg_op = await bot.send_message(opponent_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n" + frames[0], parse_mode="HTML")
 
     # Показываем кадры
     for i, frame in enumerate(frames[1:], 1):
         await asyncio.sleep(1.2)
-        text = f"⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>
-
-{frame}"
+        text = f"⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n{frame}"
         try:
             await msg_ch.edit_text(text, parse_mode="HTML")
         except:
@@ -298,7 +268,7 @@ async def run_duel_animation(bot: Bot, challenger_id: int, opponent_id: int, due
     await db.add_loss(loser_id)
     await db.update_duel_status(duel_id, "completed", winner_id)
 
-    # Начисляем выигрыш (2 монеты — ставки обоих)
+    # Начисляем выигрыш (множитель из БД)
     win_multiplier = await db.get_economy_setting_int("win_multiplier", 2)
     await db.add_coins(winner_id, duel_cost * win_multiplier, "Выигрыш в дуэли")
 
@@ -314,11 +284,8 @@ async def run_duel_animation(bot: Bot, challenger_id: int, opponent_id: int, due
                 await db.mark_referral_rewarded(user["referred_by"], uid)
                 await bot.send_message(
                     user["referred_by"],
-                    f"🎉 <b>Реферальный бонус!</b>
-
-"
-                    f"Ваш реферал сыграл 18 дуэлей!
-"
+                    f"🎉 <b>Реферальный бонус!</b>\n\n"
+                    f"Ваш реферал сыграл 18 дуэлей!\n"
                     f"💎 Получено {REFERRAL_REWARD_DC} донат-коина!"
                 )
 
@@ -327,27 +294,17 @@ async def run_duel_animation(bot: Bot, challenger_id: int, opponent_id: int, due
     loser = await db.get_user(loser_id)
 
     await msg_ch.edit_text(
-        f"{'🏆' if winner_id == challenger_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>
-
-"
-        f"{'🎉 Вы победили!' if winner_id == challenger_id else '💔 Вы проиграли...'}
-
-"
-        f"💰 {'+' if winner_id == challenger_id else '-'}{DUEL_COST} монета
-"
+        f"{'🏆' if winner_id == challenger_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>\n\n"
+        f"{'🎉 Вы победили!' if winner_id == challenger_id else '💔 Вы проиграли...'}\n\n"
+        f"💰 {'+' if winner_id == challenger_id else '-'}{duel_cost} монета\n"
         f"📊 Баланс: {winner['balance_coins'] if winner_id == challenger_id else loser['balance_coins']} монет",
         parse_mode="HTML"
     )
 
     await msg_op.edit_text(
-        f"{'🏆' if winner_id == opponent_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>
-
-"
-        f"{'🎉 Вы победили!' if winner_id == opponent_id else '💔 Вы проиграли...'}
-
-"
-        f"💰 {'+' if winner_id == opponent_id else '-'}{DUEL_COST} монета
-"
+        f"{'🏆' if winner_id == opponent_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>\n\n"
+        f"{'🎉 Вы победили!' if winner_id == opponent_id else '💔 Вы проиграли...'}\n\n"
+        f"💰 {'+' if winner_id == opponent_id else '-'}{duel_cost} монета\n"
         f"📊 Баланс: {winner['balance_coins'] if winner_id == opponent_id else loser['balance_coins']} монет",
         parse_mode="HTML"
     )
