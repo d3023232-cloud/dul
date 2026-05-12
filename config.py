@@ -18,6 +18,11 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 if CHANNEL_ID and not CHANNEL_ID.startswith("@") and not CHANNEL_ID.startswith("-"):
     CHANNEL_ID = f"@{CHANNEL_ID}"
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
+
+# === БАЗА ДАННЫХ ===
+# SQLite (по умолчанию). Для PostgreSQL задайте DATABASE_URL
+DB_PATH = os.getenv("DB_PATH", "/app/data/duel_bot.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 # Автодополнение URL если пользователь ввёл только юзернейм
 if CHANNEL_LINK and not CHANNEL_LINK.startswith("http"):
     CHANNEL_LINK = f"https://t.me/{CHANNEL_LINK.lstrip('@')}"

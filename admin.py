@@ -1,6 +1,7 @@
 """Админ-панель — полный контроль над игроками"""
 
 import asyncio
+import os
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -13,6 +14,34 @@ from config import ADMIN_IDS
 from helpers import format_user_name, calculate_winrate
 
 router = Router()
+
+
+@router.message(Command("export_db"))
+async def cmd_export_db(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    from config import DB_PATH
+    
+    if not os.path.exists(DB_PATH):
+        await message.answer(f"❌ Файл БД не найден: <code>{DB_PATH}</code>", parse_mode="HTML")
+        return
+    
+    file_size = os.path.getsize(DB_PATH)
+    file_size_mb = file_size / (1024 * 1024)
+    
+    from aiogram.types import FSInputFile
+    await message.answer_document(
+        document=FSInputFile(DB_PATH, filename="duel_bot.db"),
+        caption=(
+            f"📦 <b>База данных Duel Bot</b>\n\n"
+            f"📁 Путь: <code>{DB_PATH}</code>\n"
+            f"📊 Размер: <b>{file_size_mb:.2f} MB</b>\n\n"
+            f"💡 Откройте через DB Browser for SQLite или аналог."
+        ),
+        parse_mode="HTML"
+    )
+
 
 
 def is_admin(user_id: int) -> bool:

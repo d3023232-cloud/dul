@@ -5,7 +5,11 @@ import datetime
 from typing import Optional, List, Dict, Any
 from config import START_COINS
 
-DB_PATH = "duel_bot.db"
+import os
+from config import DB_PATH
+
+# Создаём директорию для БД если её нет
+os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
 
 
 class Database:
