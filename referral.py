@@ -45,27 +45,22 @@ async def show_referral(message: Message, state: FSMContext):
 async def show_top(message: Message):
     users = await db.get_all_users()
 
-    sorted_users = sorted(users, key=lambda x: x["wins"], reverse=True)[:10]
+    # Топ по победам
+    top_wins = sorted(users, key=lambda x: x["wins"], reverse=True)[:10]
 
-    text = "🏆 <b>Топ 10 игроков по победам</b>\n\n"
+    text = "🏆 <b>Топ 10 игроков</b>\n\n"
 
-    for i, user in enumerate(sorted_users, 1):
+    text += "<b>📈 По победам:</b>\n"
+    for i, user in enumerate(top_wins, 1):
         name = user.get("first_name") or user.get("username") or f"User {user['telegram_id']}"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
         text += f"{medal} {name} — 🏆{user['wins']} / 💀{user['losses']}\n"
 
-    await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
+    # Топ по монетам
+    top_coins = sorted(users, key=lambda x: x["balance_coins"], reverse=True)[:10]
 
-
-@router.message(F.text == "💰 Топ по монетам")
-async def show_top_coins(message: Message):
-    users = await db.get_all_users()
-
-    sorted_users = sorted(users, key=lambda x: x["balance_coins"], reverse=True)[:10]
-
-    text = "💰 <b>Топ 10 богачей</b>\n\n"
-
-    for i, user in enumerate(sorted_users, 1):
+    text += "\n<b>💰 По балансу монет:</b>\n"
+    for i, user in enumerate(top_coins, 1):
         name = user.get("first_name") or user.get("username") or f"User {user['telegram_id']}"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
         vip_badge = "👑" if user.get("is_vip") else ""

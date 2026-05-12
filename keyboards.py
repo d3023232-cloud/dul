@@ -10,7 +10,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="⚔️ Дуэль"), KeyboardButton(text="👤 Профиль")],
             [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🔗 Рефералка")],
-            [KeyboardButton(text="📊 Топ игроков"), KeyboardButton(text="💰 Топ по монетам")],
+            [KeyboardButton(text="📊 Топ игроков")],
         ],
         resize_keyboard=True
     )
