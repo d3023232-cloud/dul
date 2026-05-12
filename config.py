@@ -14,7 +14,13 @@ ADMIN_IDS = [int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip().isdi
 
 # === КАНАЛ ===
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+# Автодополнение @ для CHANNEL_ID
+if CHANNEL_ID and not CHANNEL_ID.startswith("@") and not CHANNEL_ID.startswith("-"):
+    CHANNEL_ID = f"@{CHANNEL_ID}"
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/your_channel")
+# Автодополнение URL если пользователь ввёл только юзернейм
+if CHANNEL_LINK and not CHANNEL_LINK.startswith("http"):
+    CHANNEL_LINK = f"https://t.me/{CHANNEL_LINK.lstrip('@')}"
 
 # === СТАТИЧЕСКИЕ НАСТРОЙКИ ===
 START_COINS = 10
