@@ -92,7 +92,8 @@ async def run_web_server():
 
 # ====== ЗАПУСК БОТА ======
 async def run_bot():
-    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+    from aiogram.client.default import DefaultBotProperties
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.update.middleware(BanCheckMiddleware())

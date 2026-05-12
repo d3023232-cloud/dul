@@ -95,7 +95,7 @@ class Database:
 
             # Заполняем дефолтные значения если таблица пустая
             async with db.execute("SELECT COUNT(*) as c FROM economy_settings") as c:
-                count = (await c.fetchone())["c"]
+                count = (await c.fetchone())[0]
 
             if count == 0:
                 defaults = [
@@ -384,14 +384,14 @@ class Database:
             async with db.execute(
                 "SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (telegram_id,)
             ) as cursor:
-                total = (await cursor.fetchone())["count"]
+                total = (await cursor.fetchone())[0]
 
             # Количество награжденных
             async with db.execute(
                 "SELECT COUNT(*) as count FROM referral_rewards WHERE inviter_id = ? AND rewarded = 1",
                 (telegram_id,)
             ) as cursor:
-                rewarded = (await cursor.fetchone())["count"]
+                rewarded = (await cursor.fetchone())[0]
 
             return {"total": total, "rewarded": rewarded}
 
@@ -414,7 +414,7 @@ class Database:
                 users = [dict(row) for row in rows]
 
             async with db.execute("SELECT COUNT(*) as total FROM users") as cursor:
-                total = (await cursor.fetchone())["total"]
+                total = (await cursor.fetchone())[0]
 
             return users, total
 
@@ -509,31 +509,31 @@ class Database:
 
             # Всего пользователей
             async with db.execute("SELECT COUNT(*) as c FROM users") as c:
-                stats["total_users"] = (await c.fetchone())["c"]
+                stats["total_users"] = (await c.fetchone())[0]
 
             # VIP пользователей
             async with db.execute("SELECT COUNT(*) as c FROM users WHERE is_vip = 1") as c:
-                stats["vip_users"] = (await c.fetchone())["c"]
+                stats["vip_users"] = (await c.fetchone())[0]
 
             # Забаненных
             async with db.execute("SELECT COUNT(*) as c FROM users WHERE is_banned = 1") as c:
-                stats["banned_users"] = (await c.fetchone())["c"]
+                stats["banned_users"] = (await c.fetchone())[0]
 
             # Всего дуэлей
             async with db.execute("SELECT COUNT(*) as c FROM duels") as c:
-                stats["total_duels"] = (await c.fetchone())["c"]
+                stats["total_duels"] = (await c.fetchone())[0]
 
             # Завершённых дуэлей
             async with db.execute("SELECT COUNT(*) as c FROM duels WHERE status = 'completed'") as c:
-                stats["completed_duels"] = (await c.fetchone())["c"]
+                stats["completed_duels"] = (await c.fetchone())[0]
 
             # Общий баланс монет
             async with db.execute("SELECT COALESCE(SUM(balance_coins), 0) as s FROM users") as c:
-                stats["total_coins"] = (await c.fetchone())["s"]
+                stats["total_coins"] = (await c.fetchone())[0]
 
             # Общий баланс DC
             async with db.execute("SELECT COALESCE(SUM(balance_donate), 0) as s FROM users") as c:
-                stats["total_donate"] = (await c.fetchone())["s"]
+                stats["total_donate"] = (await c.fetchone())[0]
 
             # Топ по победам
             async with db.execute(
