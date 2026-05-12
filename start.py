@@ -10,7 +10,7 @@ from database import db
 from states import MainMenu
 from keyboards import main_menu_kb, subscribe_kb, back_to_menu_kb
 from helpers import generate_referral_code, should_reset_daily, get_today_msk
-from config import CHANNEL_ID, CHANNEL_LINK, START_COINS, RECOVERY_INTERVAL_MINUTES
+from config import CHANNEL_ID, CHANNEL_LINK, START_COINS
 
 router = Router()
 
