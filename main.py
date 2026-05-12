@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import TelegramObject, Update
 from aiogram.enums import ParseMode
@@ -49,7 +50,10 @@ class BanCheckMiddleware(BaseMiddleware):
                 if user and user.get("is_banned"):
                     try:
                         if event.message:
-                            await event.message.answer("🚫 <b>Ваш аккаунт заблокирован.</b>\n\nОбратитесь к администратору.", parse_mode="HTML")
+                            await event.message.answer(
+                                "🚫 <b>Ваш аккаунт заблокирован.</b>\n\nОбратитесь к администратору.",
+                                parse_mode="HTML"
+                            )
                         elif event.callback_query:
                             await event.callback_query.answer("🚫 Вы заблокированы!", show_alert=True)
                     except:
@@ -59,7 +63,35 @@ class BanCheckMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-async def main():
+# ====== ВЕБ-СЕРВЕР (для хостинга) ======
+async def health_handler(request):
+    """Health-check для хостинга"""
+    return web.Response(text="🤠 Duel Bot is running!", status=200)
+
+
+async def run_web_server():
+    """Запускает HTTP-сервер для health-check"""
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+
+    # BotHost и другие хостинги задают PORT
+    port = int(os.getenv("PORT", "8080"))
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    logger.info(f"🌐 Веб-сервер запущен на порту {port}")
+
+    # Держим сервер живым
+    while True:
+        await asyncio.sleep(3600)
+
+
+# ====== ЗАПУСК БОТА ======
+async def run_bot():
     bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
     dp = Dispatcher(storage=MemoryStorage())
 
@@ -82,6 +114,14 @@ async def main():
     logger.info("Бот запущен!")
 
     await dp.start_polling(bot)
+
+
+async def main():
+    """Запускает бота и веб-сервер параллельно"""
+    await asyncio.gather(
+        run_bot(),
+        run_web_server()
+    )
 
 
 if __name__ == "__main__":
