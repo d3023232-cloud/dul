@@ -14,13 +14,10 @@ from helpers import format_user_name, calculate_winrate
 
 router = Router()
 
-# ====== ПРОВЕРКА АДМИНА ======
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-
-# ====== ГЛАВНОЕ МЕНЮ АДМИНА ======
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
@@ -29,10 +26,7 @@ async def cmd_admin(message: Message, state: FSMContext):
 
     await state.set_state(AdminState.main)
     await message.answer(
-        "🛡️ <b>АДМИН-ПАНЕЛЬ</b>
-
-"
-        "Выберите раздел:",
+        "🛡️ <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите раздел:",
         reply_markup=admin_main_kb(),
         parse_mode="HTML"
     )
@@ -44,16 +38,12 @@ async def admin_back(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AdminState.main)
     await callback.message.edit_text(
-        "🛡️ <b>АДМИН-ПАНЕЛЬ</b>
-
-Выберите раздел:",
+        "🛡️ <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите раздел:",
         reply_markup=admin_main_kb(),
         parse_mode="HTML"
     )
     await callback.answer()
 
-
-# ====== СПИСОК ИГРОКОВ ======
 
 @router.callback_query(F.data == "admin_users")
 async def admin_users_list(callback: CallbackQuery, state: FSMContext):
@@ -66,10 +56,7 @@ async def admin_users_list(callback: CallbackQuery, state: FSMContext):
     await state.update_data(admin_users=users, admin_total=total, admin_page=0)
 
     await callback.message.edit_text(
-        f"👥 <b>Список игроков</b> (всего: {total})
-
-"
-        f"Нажмите на игрока для управления:",
+        f"👥 <b>Список игроков</b> (всего: {total})\n\nНажмите на игрока для управления:",
         reply_markup=admin_user_list_kb(users),
         parse_mode="HTML"
     )
@@ -87,17 +74,12 @@ async def admin_pagination(callback: CallbackQuery, state: FSMContext):
     await state.update_data(admin_users=users, admin_total=total, admin_page=page)
 
     await callback.message.edit_text(
-        f"👥 <b>Список игроков</b> (всего: {total})
-
-"
-        f"Нажмите на игрока для управления:",
+        f"👥 <b>Список игроков</b> (всего: {total})\n\nНажмите на игрока для управления:",
         reply_markup=admin_user_list_kb(users, page=page),
         parse_mode="HTML"
     )
     await callback.answer()
 
-
-# ====== ПРОСМОТР ИГРОКА ======
 
 @router.callback_query(F.data.startswith("admin_view_user:"))
 async def admin_view_user(callback: CallbackQuery, state: FSMContext):
@@ -118,24 +100,20 @@ async def admin_view_user(callback: CallbackQuery, state: FSMContext):
     ban_status = "🚫 ЗАБАНЕН" if user.get("is_banned") else "✅ Активен"
     limit = await db.get_recovery_limit(user_id)
 
-    text = f"""
-🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
-👤 <b>Имя:</b> {user.get('first_name') or '—'}
-📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
-
-💰 <b>Монеты:</b> {user['balance_coins']}
-💎 <b>Донат-коины:</b> {user['balance_donate']}
-
-⚔️ <b>Статистика:</b>
-   🏆 Побед: {user['wins']} | 💀 Поражений: {user['losses']}
-   📊 Всего: {user['duels_played']} | 📈 Винрейт: {winrate}%
-
-🔄 <b>Восстановления:</b> {user['recoveries_today']}/{limit}
-⭐ <b>Статус:</b> {status}
-🔒 <b>Состояние:</b> {ban_status}
-
-📅 <b>Регистрация:</b> {user['created_at'][:10]}
-"""
+    text = (
+        f"🆔 <b>ID:</b> <code>{user['telegram_id']}</code>\n"
+        f"👤 <b>Имя:</b> {user.get('first_name') or '—'}\n"
+        f"📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}\n\n"
+        f"💰 <b>Монеты:</b> {user['balance_coins']}\n"
+        f"💎 <b>Донат-коины:</b> {user['balance_donate']}\n\n"
+        f"⚔️ <b>Статистика:</b>\n"
+        f"   🏆 Побед: {user['wins']} | 💀 Поражений: {user['losses']}\n"
+        f"   📊 Всего: {user['duels_played']} | 📈 Винрейт: {winrate}%\n\n"
+        f"🔄 <b>Восстановления:</b> {user['recoveries_today']}/{limit}\n"
+        f"⭐ <b>Статус:</b> {status}\n"
+        f"🔒 <b>Состояние:</b> {ban_status}\n\n"
+        f"📅 <b>Регистрация:</b> {user['created_at'][:10]}"
+    )
 
     await callback.message.edit_text(
         text,
@@ -144,8 +122,6 @@ async def admin_view_user(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-
-# ====== ВЫДАЧА / ЗАБОР МОНЕТ ======
 
 @router.callback_query(F.data.startswith("admin_give_coins:"))
 async def admin_give_coins_start(callback: CallbackQuery, state: FSMContext):
@@ -157,11 +133,8 @@ async def admin_give_coins_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.entering_amount)
 
     await callback.message.edit_text(
-        f"➕ <b>Выдача монет</b>
-
-"
-        f"Игрок: <code>{user_id}</code>
-"
+        f"➕ <b>Выдача монет</b>\n\n"
+        f"Игрок: <code>{user_id}</code>\n"
         f"Введите количество монет для выдачи:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
@@ -179,19 +152,14 @@ async def admin_take_coins_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.entering_amount)
 
     await callback.message.edit_text(
-        f"➖ <b>Забор монет</b>
-
-"
-        f"Игрок: <code>{user_id}</code>
-"
+        f"➖ <b>Забор монет</b>\n\n"
+        f"Игрок: <code>{user_id}</code>\n"
         f"Введите количество монет для забора:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
     )
     await callback.answer()
 
-
-# ====== ВЫДАЧА / ЗАБОР DC ======
 
 @router.callback_query(F.data.startswith("admin_give_dc:"))
 async def admin_give_dc_start(callback: CallbackQuery, state: FSMContext):
@@ -203,11 +171,8 @@ async def admin_give_dc_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.entering_amount)
 
     await callback.message.edit_text(
-        f"➕ <b>Выдача донат-коинов</b>
-
-"
-        f"Игрок: <code>{user_id}</code>
-"
+        f"➕ <b>Выдача донат-коинов</b>\n\n"
+        f"Игрок: <code>{user_id}</code>\n"
         f"Введите количество DC для выдачи:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
@@ -225,19 +190,14 @@ async def admin_take_dc_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.entering_amount)
 
     await callback.message.edit_text(
-        f"➖ <b>Забор донат-коинов</b>
-
-"
-        f"Игрок: <code>{user_id}</code>
-"
+        f"➖ <b>Забор донат-коинов</b>\n\n"
+        f"Игрок: <code>{user_id}</code>\n"
         f"Введите количество DC для забора:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
     )
     await callback.answer()
 
-
-# ====== ОБРАБОТКА ВВОДА СУММЫ ======
 
 @router.message(AdminState.entering_amount)
 async def admin_process_amount(message: Message, state: FSMContext):
@@ -266,7 +226,6 @@ async def admin_process_amount(message: Message, state: FSMContext):
         await message.answer("❌ Пользователь не найден!")
         return
 
-    # Формируем текст подтверждения
     action_texts = {
         "give_coins": ("выдачи монет", "монет", "give_coins"),
         "take_coins": ("забора монет", "монет", "take_coins"),
@@ -278,14 +237,9 @@ async def admin_process_amount(message: Message, state: FSMContext):
 
     await state.set_state(AdminState.main)
     await message.answer(
-        f"⚠️ <b>Подтвердите {text}</b>
-
-"
-        f"Игрок: <code>{target_id}</code> ({format_user_name(user)})
-"
-        f"Количество: <b>{amount} {currency}</b>
-
-"
+        f"⚠️ <b>Подтвердите {text}</b>\n\n"
+        f"Игрок: <code>{target_id}</code> ({format_user_name(user)})\n"
+        f"Количество: <b>{amount} {currency}</b>\n\n"
         f"Текущий баланс: {user['balance_coins'] if 'coins' in action else user['balance_donate']} {currency}",
         reply_markup=admin_confirm_kb(confirm_action, target_id, amount),
         parse_mode="HTML"
@@ -293,7 +247,7 @@ async def admin_process_amount(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_confirm:"))
-async def admin_confirm_action(callback: CallbackQuery, state: FSMContext):
+async def admin_confirm_action(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
 
@@ -308,14 +262,12 @@ async def admin_confirm_action(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Пользователь не найден!", show_alert=True)
         return
 
-    # Выполняем действие
     if action == "give_coins":
         await db.add_coins(target_id, amount, f"Выдано админом {admin_id}")
         await db.admin_log(admin_id, "give_coins", target_id, f"+{amount}")
         text = f"✅ Выдано <b>{amount} монет</b> игроку <code>{target_id}</code>"
 
     elif action == "take_coins":
-        # Не уходим в минус
         take_amount = min(amount, user["balance_coins"])
         if take_amount > 0:
             await db.remove_coins(target_id, take_amount, f"Забрано админом {admin_id}")
@@ -339,17 +291,12 @@ async def admin_confirm_action(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.edit_text(
-        text + "
-
-" + f"Новый баланс игрока:
-💰 {user['balance_coins']} монет | 💎 {user['balance_donate']} DC",
+        text + "\n\n" + f"Новый баланс игрока:\n💰 {user['balance_coins']} монет | 💎 {user['balance_donate']} DC",
         reply_markup=admin_user_actions_kb(target_id, is_banned=user.get("is_banned", False), is_vip=user["is_vip"]),
         parse_mode="HTML"
     )
     await callback.answer("✅ Выполнено!")
 
-
-# ====== VIP / БАН ======
 
 @router.callback_query(F.data.startswith("admin_give_vip:"))
 async def admin_give_vip(callback: CallbackQuery):
@@ -362,9 +309,7 @@ async def admin_give_vip(callback: CallbackQuery):
 
     user = await db.get_user(user_id)
     await callback.message.edit_text(
-        f"👑 <b>VIP выдан!</b>
-
-Игрок: <code>{user_id}</code>",
+        f"👑 <b>VIP выдан!</b>\n\nИгрок: <code>{user_id}</code>",
         reply_markup=admin_user_actions_kb(user_id, is_banned=user.get("is_banned", False), is_vip=True),
         parse_mode="HTML"
     )
@@ -382,9 +327,7 @@ async def admin_remove_vip(callback: CallbackQuery):
 
     user = await db.get_user(user_id)
     await callback.message.edit_text(
-        f"❌ <b>VIP снят!</b>
-
-Игрок: <code>{user_id}</code>",
+        f"❌ <b>VIP снят!</b>\n\nИгрок: <code>{user_id}</code>",
         reply_markup=admin_user_actions_kb(user_id, is_banned=user.get("is_banned", False), is_vip=False),
         parse_mode="HTML"
     )
@@ -402,11 +345,7 @@ async def admin_ban(callback: CallbackQuery):
 
     user = await db.get_user(user_id)
     await callback.message.edit_text(
-        f"🚫 <b>Игрок забанен!</b>
-
-ID: <code>{user_id}</code>
-
-"
+        f"🚫 <b>Игрок забанен!</b>\n\nID: <code>{user_id}</code>\n\n"
         f"Игрок больше не сможет использовать бота.",
         reply_markup=admin_user_actions_kb(user_id, is_banned=True, is_vip=user["is_vip"]),
         parse_mode="HTML"
@@ -425,16 +364,12 @@ async def admin_unban(callback: CallbackQuery):
 
     user = await db.get_user(user_id)
     await callback.message.edit_text(
-        f"✅ <b>Игрок разбанен!</b>
-
-ID: <code>{user_id}</code>",
+        f"✅ <b>Игрок разбанен!</b>\n\nID: <code>{user_id}</code>",
         reply_markup=admin_user_actions_kb(user_id, is_banned=False, is_vip=user["is_vip"]),
         parse_mode="HTML"
     )
     await callback.answer("✅ Разбанен!")
 
-
-# ====== ТРАНЗАКЦИИ ИГРОКА ======
 
 @router.callback_query(F.data.startswith("admin_transactions:"))
 async def admin_view_transactions(callback: CallbackQuery):
@@ -448,19 +383,13 @@ async def admin_view_transactions(callback: CallbackQuery):
     if not transactions:
         text = "📜 <b>Транзакции не найдены</b>"
     else:
-        text = f"📜 <b>Транзакции игрока</b> <code>{user_id}</code>
-
-"
+        text = f"📜 <b>Транзакции игрока</b> <code>{user_id}</code>\n\n"
         for tx in transactions:
             emoji = "➕" if tx["type"] == "add" else ("➖" if tx["type"] == "remove" else "🔄")
             text += (
-                f"{emoji} <b>{tx['amount']}</b> {tx['currency']} | {tx['type']}
-"
-                f"   📝 {tx['description'] or '—'}
-"
-                f"   🕐 {tx['created_at'][:16]}
-
-"
+                f"{emoji} <b>{tx['amount']}</b> {tx['currency']} | {tx['type']}\n"
+                f"   📝 {tx['description'] or '—'}\n"
+                f"   🕐 {tx['created_at'][:16]}\n\n"
             )
 
     await callback.message.edit_text(
@@ -475,8 +404,6 @@ async def admin_view_transactions(callback: CallbackQuery):
     await callback.answer()
 
 
-# ====== ПОИСК ИГРОКА ======
-
 @router.callback_query(F.data == "admin_search")
 async def admin_search_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -484,9 +411,7 @@ async def admin_search_start(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AdminState.searching_user)
     await callback.message.edit_text(
-        "🔍 <b>Поиск игрока</b>
-
-"
+        "🔍 <b>Поиск игрока</b>\n\n"
         "Введите ID, юзернейм или имя игрока:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
@@ -510,7 +435,6 @@ async def admin_search_process(message: Message, state: FSMContext):
         return
 
     if len(results) == 1:
-        # Сразу показываем профиль
         user = results[0]
         await state.update_data(admin_target_id=user["telegram_id"])
         await state.set_state(AdminState.main)
@@ -520,34 +444,24 @@ async def admin_search_process(message: Message, state: FSMContext):
         ban_status = "🚫 ЗАБАНЕН" if user.get("is_banned") else "✅ Активен"
 
         await message.answer(
-            f"🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
-"
-            f"👤 <b>Имя:</b> {user.get('first_name') or '—'}
-"
-            f"📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
-"
-            f"💰 <b>Монеты:</b> {user['balance_coins']} | 💎 <b>DC:</b> {user['balance_donate']}
-"
-            f"🏆 <b>Побед:</b> {user['wins']} | 💀 <b>Поражений:</b> {user['losses']} | 📈 <b>Винрейт:</b> {winrate}%
-"
+            f"🆔 <b>ID:</b> <code>{user['telegram_id']}</code>\n"
+            f"👤 <b>Имя:</b> {user.get('first_name') or '—'}\n"
+            f"📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}\n"
+            f"💰 <b>Монеты:</b> {user['balance_coins']} | 💎 <b>DC:</b> {user['balance_donate']}\n"
+            f"🏆 <b>Побед:</b> {user['wins']} | 💀 <b>Поражений:</b> {user['losses']} | 📈 <b>Винрейт:</b> {winrate}%\n"
             f"⭐ <b>Статус:</b> {status} | 🔒 <b>Состояние:</b> {ban_status}",
             reply_markup=admin_user_actions_kb(user["telegram_id"], is_banned=user.get("is_banned", False), is_vip=user["is_vip"]),
             parse_mode="HTML"
         )
     else:
-        # Показываем список найденных
         await state.update_data(admin_users=results, admin_total=len(results), admin_page=0)
         await state.set_state(AdminState.main)
         await message.answer(
-            f"🔍 <b>Найдено игроков: {len(results)}</b>
-
-Выберите:",
+            f"🔍 <b>Найдено игроков: {len(results)}</b>\n\nВыберите:",
             reply_markup=admin_user_list_kb(results),
             parse_mode="HTML"
         )
 
-
-# ====== СТАТИСТИКА БОТА ======
 
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
@@ -556,28 +470,23 @@ async def admin_stats(callback: CallbackQuery):
 
     stats = await db.get_bot_stats()
 
-    text = f"""
-📊 <b>СТАТИСТИКА БОТА</b>
-
-👥 <b>Пользователи:</b>
-   Всего: <b>{stats['total_users']}</b>
-   VIP: <b>{stats['vip_users']}</b>
-   Забанено: <b>{stats['banned_users']}</b>
-
-⚔️ <b>Дуэли:</b>
-   Всего создано: <b>{stats['total_duels']}</b>
-   Завершено: <b>{stats['completed_duels']}</b>
-
-💰 <b>Экономика:</b>
-   Монет в обороте: <b>{stats['total_coins']}</b>
-   DC в обороте: <b>{stats['total_donate']}</b>
-
-🏆 <b>Топ победителей:</b>
-"""
+    text = (
+        "📊 <b>СТАТИСТИКА БОТА</b>\n\n"
+        f"👥 <b>Пользователи:</b>\n"
+        f"   Всего: <b>{stats['total_users']}</b>\n"
+        f"   VIP: <b>{stats['vip_users']}</b>\n"
+        f"   Забанено: <b>{stats['banned_users']}</b>\n\n"
+        f"⚔️ <b>Дуэли:</b>\n"
+        f"   Всего создано: <b>{stats['total_duels']}</b>\n"
+        f"   Завершено: <b>{stats['completed_duels']}</b>\n\n"
+        f"💰 <b>Экономика:</b>\n"
+        f"   Монет в обороте: <b>{stats['total_coins']}</b>\n"
+        f"   DC в обороте: <b>{stats['total_donate']}</b>\n\n"
+        f"🏆 <b>Топ победителей:</b>\n"
+    )
     for i, u in enumerate(stats["top_winners"], 1):
         name = u.get("first_name") or u.get("username") or f"ID:{u['telegram_id']}"
-        text += f"   {i}. {name} — {u['wins']} побед
-"
+        text += f"   {i}. {name} — {u['wins']} побед\n"
 
     await callback.message.edit_text(
         text,
@@ -586,8 +495,6 @@ async def admin_stats(callback: CallbackQuery):
     )
     await callback.answer()
 
-
-# ====== АКТИВНЫЕ ДУЭЛИ ======
 
 @router.callback_query(F.data == "admin_duels")
 async def admin_duels(callback: CallbackQuery):
@@ -599,9 +506,7 @@ async def admin_duels(callback: CallbackQuery):
     if not duels:
         text = "⚔️ <b>Дуэлей пока нет</b>"
     else:
-        text = "⚔️ <b>Последние дуэли:</b>
-
-"
+        text = "⚔️ <b>Последние дуэли:</b>\n\n"
         status_emojis = {
             "pending": "⏳", "active": "🔥", "completed": "✅",
             "expired": "⏰", "declined": "❌"
@@ -609,17 +514,11 @@ async def admin_duels(callback: CallbackQuery):
         for d in duels:
             emoji = status_emojis.get(d["status"], "❓")
             text += (
-                f"{emoji} ID: <code>{d['id']}</code> | Статус: <b>{d['status']}</b>
-"
-                f"   Вызывающий: <code>{d['challenger_id']}</code>
-"
-                f"   Оппонент: <code>{d['opponent_id']}</code>
-"
-                f"   Ставка: {d['bet']} монет
-"
-                f"   🕐 {d['created_at'][:16]}
-
-"
+                f"{emoji} ID: <code>{d['id']}</code> | Статус: <b>{d['status']}</b>\n"
+                f"   Вызывающий: <code>{d['challenger_id']}</code>\n"
+                f"   Оппонент: <code>{d['opponent_id']}</code>\n"
+                f"   Ставка: {d['bet']} монет\n"
+                f"   🕐 {d['created_at'][:16]}\n\n"
             )
 
     await callback.message.edit_text(
@@ -630,8 +529,6 @@ async def admin_duels(callback: CallbackQuery):
     await callback.answer()
 
 
-# ====== РАССЫЛКА ======
-
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -639,12 +536,8 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AdminState.broadcasting)
     await callback.message.edit_text(
-        "📢 <b>Рассылка всем пользователям</b>
-
-"
-        "Отправьте сообщение для рассылки (поддерживается HTML):
-
-"
+        "📢 <b>Рассылка всем пользователям</b>\n\n"
+        "Отправьте сообщение для рассылки (поддерживается HTML):\n\n"
         "⚠️ Будьте осторожны — сообщение уйдёт ВСЕМ игрокам!",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
@@ -676,14 +569,11 @@ async def admin_broadcast_send(message: Message, state: FSMContext, bot: Bot):
                 await status_msg.edit_text(f"📤 Рассылка... {sent + failed}/{total} (✅{sent} ❌{failed})")
             except:
                 pass
-        await asyncio.sleep(0.05)  # Антифлуд
+        await asyncio.sleep(0.05)
 
     await status_msg.edit_text(
-        f"✅ <b>Рассылка завершена!</b>
-
-"
-        f"📤 Отправлено: <b>{sent}</b>
-"
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📤 Отправлено: <b>{sent}</b>\n"
         f"❌ Ошибок: <b>{failed}</b>",
         parse_mode="HTML"
     )
@@ -702,19 +592,13 @@ async def admin_economy_menu(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.editing_economy)
     settings = await db.get_all_economy_settings()
 
-    text = "⚙️ <b>НАСТРОЙКИ ЭКОНОМИКИ</b>
-
-"
-    text += "Нажмите на параметр для изменения:
-
-"
+    text = "⚙️ <b>НАСТРОЙКИ ЭКОНОМИКИ</b>\n\n"
+    text += "Нажмите на параметр для изменения:\n\n"
 
     for s in settings:
-        text += f"• <b>{s['key']}</b> = <code>{s['value']}</code>
-"
+        text += f"• <b>{s['key']}</b> = <code>{s['value']}</code>\n"
         if s.get('description'):
-            text += f"   <i>{s['description']}</i>
-"
+            text += f"   <i>{s['description']}</i>\n"
 
     await callback.message.edit_text(
         text,
@@ -746,15 +630,9 @@ async def economy_edit_select(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.entering_economy_value)
 
     await callback.message.edit_text(
-        f"⚙️ <b>Редактирование: {key}</b>
-
-"
-        f"Текущее значение: <code>{value}</code>
-
-"
-        f"📖 <i>{descriptions.get(key, 'Нет описания')}</i>
-
-"
+        f"⚙️ <b>Редактирование: {key}</b>\n\n"
+        f"Текущее значение: <code>{value}</code>\n\n"
+        f"📖 <i>{descriptions.get(key, 'Нет описания')}</i>\n\n"
         f"Введите новое значение (только число):",
         reply_markup=economy_edit_kb(key),
         parse_mode="HTML"
@@ -776,9 +654,8 @@ async def economy_edit_process(message: Message, state: FSMContext):
         return
 
     try:
-        # Проверяем что введено число
         new_value = message.text.strip()
-        int(new_value)  # Валидация
+        int(new_value)
 
         old_value = await db.get_economy_setting(key, "не задано")
         await db.set_economy_setting(key, new_value)
@@ -788,12 +665,8 @@ async def economy_edit_process(message: Message, state: FSMContext):
         settings = await db.get_all_economy_settings()
 
         await message.answer(
-            f"✅ <b>Обновлено!</b>
-
-"
-            f"{key}: <code>{old_value}</code> → <code>{new_value}</code>
-
-"
+            f"✅ <b>Обновлено!</b>\n\n"
+            f"{key}: <code>{old_value}</code> → <code>{new_value}</code>\n\n"
             f"⚠️ Изменения вступают в силу <b>немедленно</b> для всех игроков!",
             reply_markup=economy_settings_kb(settings),
             parse_mode="HTML"
@@ -824,9 +697,7 @@ async def economy_reset_defaults(callback: CallbackQuery, state: FSMContext):
 
     settings = await db.get_all_economy_settings()
     await callback.message.edit_text(
-        "🔄 <b>Настройки сброшены до значений по умолчанию!</b>
-
-",
+        "🔄 <b>Настройки сброшены до значений по умолчанию!</b>\n\n",
         reply_markup=economy_settings_kb(settings),
         parse_mode="HTML"
     )

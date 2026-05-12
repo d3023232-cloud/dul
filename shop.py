@@ -21,22 +21,12 @@ async def open_shop(message: Message, state: FSMContext):
 
     await state.set_state(ShopState.main)
     await message.answer(
-        f"🛒 <b>Донат-магазин</b>
-
-"
-        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>
-
-"
-        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC
-"
-        f"   └ Увеличивает лимит восстановлений с 5 до 15
-
-"
-        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC
-"
-        f"   └ Обнуляет счётчик восстановлений на сегодня
-
-"
+        f"🛒 <b>Донат-магазин</b>\n\n"
+        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
+        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC\n"
+        f"   └ Увеличивает лимит восстановлений с 5 до 15\n\n"
+        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC\n"
+        f"   └ Обнуляет счётчик восстановлений на сегодня\n\n"
         f"💰 <b>Покупка монет</b> — {COIN_PRICE_DC} DC = 1 монета",
         reply_markup=shop_kb(),
         parse_mode="HTML"
@@ -57,14 +47,9 @@ async def buy_vip(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        f"👑 <b>Покупка VIP Premium</b>
-
-"
-        f"Цена: <b>{VIP_PRICE} DC</b>
-"
-        f"Ваш баланс: <b>{user['balance_donate']} DC</b>
-
-"
+        f"👑 <b>Покупка VIP Premium</b>\n\n"
+        f"Цена: <b>{VIP_PRICE} DC</b>\n"
+        f"Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
         f"Подтвердите покупку:",
         reply_markup=confirm_purchase_kb("vip", VIP_PRICE),
         parse_mode="HTML"
@@ -82,16 +67,10 @@ async def buy_reset(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        f"🔄 <b>Сброс лимита восстановлений</b>
-
-"
-        f"Цена: <b>{RESET_LIMIT_PRICE} DC</b>
-"
-        f"Ваш баланс: <b>{user['balance_donate']} DC</b>
-
-"
-        f"Сбросит счётчик восстановлений на сегодня.
-"
+        f"🔄 <b>Сброс лимита восстановлений</b>\n\n"
+        f"Цена: <b>{RESET_LIMIT_PRICE} DC</b>\n"
+        f"Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
+        f"Сбросит счётчик восстановлений на сегодня.\n"
         f"Подтвердите покупку:",
         reply_markup=confirm_purchase_kb("reset", RESET_LIMIT_PRICE),
         parse_mode="HTML"
@@ -105,14 +84,9 @@ async def buy_coins_menu(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
 
     await callback.message.edit_text(
-        f"💰 <b>Покупка монет</b>
-
-"
-        f"Курс: <b>{COIN_PRICE_DC} DC = 1 монета</b>
-"
-        f"Ваш баланс DC: <b>{user['balance_donate']}</b>
-
-"
+        f"💰 <b>Покупка монет</b>\n\n"
+        f"Курс: <b>{COIN_PRICE_DC} DC = 1 монета</b>\n"
+        f"Ваш баланс DC: <b>{user['balance_donate']}</b>\n\n"
         f"Выберите количество:",
         reply_markup=buy_coins_kb(),
         parse_mode="HTML"
@@ -132,14 +106,9 @@ async def buy_coins_package(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        f"💰 <b>Покупка монет</b>
-
-"
-        f"Количество: <b>{amount} монет</b>
-"
-        f"Стоимость: <b>{cost} DC</b>
-
-"
+        f"💰 <b>Покупка монет</b>\n\n"
+        f"Количество: <b>{amount} монет</b>\n"
+        f"Стоимость: <b>{cost} DC</b>\n\n"
         f"Подтвердите покупку:",
         reply_markup=confirm_purchase_kb(f"coins:{amount}", cost),
         parse_mode="HTML"
@@ -151,12 +120,9 @@ async def buy_coins_package(callback: CallbackQuery):
 async def buy_coins_custom(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ShopState.entering_custom_amount)
     await callback.message.edit_text(
-        "✏️ <b>Введите количество монет для покупки:</b>
-
-"
-        f"Курс: {COIN_PRICE_DC} DC = 1 монета
-"
-        "Отправьте число:",
+        f"✏️ <b>Введите количество монет для покупки:</b>\n\n"
+        f"Курс: {COIN_PRICE_DC} DC = 1 монета\n"
+        f"Отправьте число:",
         reply_markup=back_to_menu_kb(),
         parse_mode="HTML"
     )
@@ -179,11 +145,8 @@ async def process_custom_amount(message: Message, state: FSMContext):
 
     if user["balance_donate"] < cost:
         await message.answer(
-            f"❌ Недостаточно DC!
-
-"
-            f"Нужно: <b>{cost} DC</b>
-"
+            f"❌ Недостаточно DC!\n\n"
+            f"Нужно: <b>{cost} DC</b>\n"
             f"У вас: <b>{user['balance_donate']} DC</b>",
             reply_markup=back_to_menu_kb(),
             parse_mode="HTML"
@@ -193,14 +156,9 @@ async def process_custom_amount(message: Message, state: FSMContext):
 
     await state.set_state(ShopState.main)
     await message.answer(
-        f"💰 <b>Покупка монет</b>
-
-"
-        f"Количество: <b>{amount} монет</b>
-"
-        f"Стоимость: <b>{cost} DC</b>
-
-"
+        f"💰 <b>Покупка монет</b>\n\n"
+        f"Количество: <b>{amount} монет</b>\n"
+        f"Стоимость: <b>{cost} DC</b>\n\n"
         f"Подтвердите покупку:",
         reply_markup=confirm_purchase_kb(f"coins:{amount}", cost),
         parse_mode="HTML"
@@ -224,9 +182,7 @@ async def confirm_purchase(callback: CallbackQuery):
     if item == "vip":
         await db.set_vip(user_id, True)
         await callback.message.edit_text(
-            "🎉 <b>VIP Premium активирован!</b>
-
-"
+            "🎉 <b>VIP Premium активирован!</b>\n\n"
             "Теперь ваш лимит восстановлений: <b>15</b> в сутки!",
             reply_markup=back_to_menu_kb(),
             parse_mode="HTML"
@@ -235,9 +191,7 @@ async def confirm_purchase(callback: CallbackQuery):
     elif item == "reset":
         await db.reset_recovery_count(user_id)
         await callback.message.edit_text(
-            "🔄 <b>Лимит восстановлений сброшен!</b>
-
-"
+            "🔄 <b>Лимит восстановлений сброшен!</b>\n\n"
             "Счётчик обнулён. Можно снова получать монеты при балансе 0.",
             reply_markup=back_to_menu_kb(),
             parse_mode="HTML"
@@ -247,11 +201,8 @@ async def confirm_purchase(callback: CallbackQuery):
         amount = int(item.split(":")[1])
         await db.add_coins(user_id, amount, f"Покупка за {price} DC")
         await callback.message.edit_text(
-            f"💰 <b>Монеты получены!</b>
-
-"
-            f"Добавлено: <b>{amount} монет</b>
-"
+            f"💰 <b>Монеты получены!</b>\n\n"
+            f"Добавлено: <b>{amount} монет</b>\n"
             f"Списано: <b>{price} DC</b>",
             reply_markup=back_to_menu_kb(),
             parse_mode="HTML"
@@ -265,16 +216,10 @@ async def shop_back(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ShopState.main)
     user = await db.get_user(callback.from_user.id)
     await callback.message.edit_text(
-        f"🛒 <b>Донат-магазин</b>
-
-"
-        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>
-
-"
-        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC
-"
-        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC
-"
+        f"🛒 <b>Донат-магазин</b>\n\n"
+        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
+        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC\n"
+        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC\n"
         f"💰 <b>Покупка монет</b> — {COIN_PRICE_DC} DC = 1 монета",
         reply_markup=shop_kb(),
         parse_mode="HTML"

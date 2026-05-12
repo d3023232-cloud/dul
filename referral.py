@@ -24,23 +24,19 @@ async def show_referral(message: Message, state: FSMContext):
     ref_link = f"https://t.me/{bot_info.username}?start={user['referral_code']}"
     stats = await db.get_referral_stats(user_id)
 
-    text = f"""
-🔗 <b>Реферальная программа</b>
-
-📢 <b>Ваша ссылка:</b>
-<code>{ref_link}</code>
-
-📊 <b>Статистика:</b>
-   👥 Всего рефералов: {stats['total']}
-   🎁 Получили бонус: {stats['rewarded']}
-
-🎁 <b>Награды за реферала:</b>
-   • Вы получаете: <b>2 монеты + 1 DC</b>
-   • Реферал получает: <b>5 монет</b>
-   • Когда реферал сыграет 18 дуэлей: <b>3 DC</b>
-
-📤 Поделитесь ссылкой с друзьями!
-"""
+    text = (
+        "🔗 <b>Реферальная программа</b>\n\n"
+        f"📢 <b>Ваша ссылка:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"   👥 Всего рефералов: {stats['total']}\n"
+        f"   🎁 Получили бонус: {stats['rewarded']}\n\n"
+        f"🎁 <b>Награды за реферала:</b>\n"
+        f"   • Вы получаете: <b>2 монеты + 1 DC</b>\n"
+        f"   • Реферал получает: <b>5 монет</b>\n"
+        f"   • Когда реферал сыграет 18 дуэлей: <b>3 DC</b>\n\n"
+        f"📤 Поделитесь ссылкой с друзьями!"
+    )
 
     await message.answer(text, reply_markup=referral_kb(ref_link), parse_mode="HTML")
 
@@ -49,17 +45,13 @@ async def show_referral(message: Message, state: FSMContext):
 async def show_top(message: Message):
     users = await db.get_all_users()
 
-    # Сортируем по победам
     sorted_users = sorted(users, key=lambda x: x["wins"], reverse=True)[:10]
 
-    text = "🏆 <b>Топ 10 игроков</b>
-
-"
+    text = "🏆 <b>Топ 10 игроков</b>\n\n"
 
     for i, user in enumerate(sorted_users, 1):
         name = user.get("first_name") or user.get("username") or f"User {user['telegram_id']}"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-        text += f"{medal} {name} — 🏆{user['wins']} / 💀{user['losses']}
-"
+        text += f"{medal} {name} — 🏆{user['wins']} / 💀{user['losses']}\n"
 
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
