@@ -10,7 +10,7 @@ from database import db
 from states import MainMenu, DuelState
 from keyboards import duel_opponent_select_kb, duel_invite_kb, main_menu_kb, back_to_menu_kb
 from helpers import format_user_name, get_duel_frames
-from config import RECOVERY_INTERVAL_MINUTES
+
 
 router = Router()
 
@@ -55,7 +55,7 @@ async def start_duel(message: Message, state: FSMContext, bot: Bot):
                     reply_markup=main_menu_kb()
                 )
             else:
-                next_recovery = RECOVERY_INTERVAL_MINUTES
+                next_recovery = await db.get_economy_setting_int('recovery_interval_minutes', 6)
                 await message.answer(
                     f"❌ <b>Недостаточно монет!</b>\n\n"
                     f"Баланс: {user['balance_coins']} монет\n"
