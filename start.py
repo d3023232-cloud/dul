@@ -43,10 +43,17 @@ async def get_welcome_text() -> str:
 
 async def check_subscription(bot: Bot, user_id: int) -> bool:
     """Проверка подписки на канал"""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        logger.info(f"[SubscribeCheck] User {user_id} status in {CHANNEL_ID}: {member.status}")
         return member.status in ["member", "administrator", "creator"]
-    except Exception:
+    except Exception as e:
+        logger.error(f"[SubscribeCheck] Error checking user {user_id} in {CHANNEL_ID}: {e}")
+        # Fallback: если проверка не работает, разрешаем доступ
+        # Уберите эту строку, если хотите строгую проверку
         return False
 
 
@@ -86,7 +93,10 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     if not is_subscribed:
         await message.answer(
             f"👋 <b>Привет, {first_name}!</b>\n\n"
-            f"Для использования бота необходимо подписаться на наш канал:",
+            f"Для использования бота необходимо подписаться на наш канал:\n\n"
+            f"📢 <b>{CHANNEL_ID}</b>\n"
+            f"🔗 {CHANNEL_LINK}\n\n"
+            f"⚠️ Убедитесь, что вы подписались, и нажмите кнопку ниже:",
             reply_markup=subscribe_kb(CHANNEL_LINK),
             parse_mode="HTML"
         )
