@@ -1,87 +1,132 @@
-"""Хендлеры профиля"""
+"""
+🤠 ДУЭЛЬ БОТ 🤠
+Telegram-бот для дуэлей между пользователями
 
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
+Запуск: python main.py
+"""
 
+import asyncio
+import logging
+import os
+
+from aiohttp import web
+from aiogram import Bot, Dispatcher, BaseMiddleware
+from aiogram.types import TelegramObject, Update
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from config import BOT_TOKEN
 from database import db
-from states import MainMenu
-from keyboards import profile_kb, main_menu_kb
-from helpers import calculate_winrate
+from scheduler import daily_reset_scheduler
+from start import router as start_router
+from duel import router as duel_router
+from profile import router as profile_router
+from shop import router as shop_router
+from referral import router as referral_router
+from admin import router as admin_router
 
-router = Router()
-
-
-@router.message(F.text == "👤 Профиль")
-async def show_profile(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    user = await db.get_user(user_id)
-
-    if not user:
-        await message.answer("❌ Сначала нажмите /start")
-        return
-
-    winrate = calculate_winrate(user["wins"], user["losses"])
-    status = "👑 VIP" if user["is_vip"] else "🤠 Обычный"
-    limit = await db.get_recovery_limit(user_id)
-
-    text = f"""
-🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
-
-👤 <b>Имя:</b> {user.get('first_name') or 'Неизвестно'}
-📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
-
-💰 <b>Монеты:</b> {user['balance_coins']}
-💎 <b>Донат-коины:</b> {user['balance_donate']}
-
-⚔️ <b>Статистика дуэлей:</b>
-   🏆 Побед: {user['wins']}
-   💀 Поражений: {user['losses']}
-   📊 Всего игр: {user['duels_played']}
-   📈 Винрейт: {winrate}%
-
-🔄 <b>Восстановления сегодня:</b> {user['recoveries_today']}/{limit}
-⭐ <b>Статус:</b> {status}
-
-📅 <b>Дата регистрации:</b> {user['created_at'][:10]}
-"""
-
-    await message.answer(text, reply_markup=profile_kb(), parse_mode="HTML")
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
-@router.callback_query(F.data == "refresh_profile")
-async def refresh_profile(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
+# ====== MIDDLEWARE: ПРОВЕРКА БАНА ======
+class BanCheckMiddleware(BaseMiddleware):
+    """Блокирует сообщения от забаненных пользователей"""
 
-    if not user:
-        await callback.answer("❌ Ошибка!", show_alert=True)
-        return
+    async def __call__(self, handler, event: TelegramObject, data: dict):
+        if isinstance(event, Update):
+            user_id = None
+            if event.message:
+                user_id = event.message.from_user.id
+            elif event.callback_query:
+                user_id = event.callback_query.from_user.id
 
-    winrate = calculate_winrate(user["wins"], user["losses"])
-    status = "👑 VIP" if user["is_vip"] else "🤠 Обычный"
-    limit = await db.get_recovery_limit(user_id)
+            if user_id:
+                user = await db.get_user(user_id)
+                if user and user.get("is_banned"):
+                    try:
+                        if event.message:
+                            await event.message.answer(
+                                "🚫 <b>Ваш аккаунт заблокирован.</b>\n\nОбратитесь к администратору.",
+                                parse_mode="HTML"
+                            )
+                        elif event.callback_query:
+                            await event.callback_query.answer("🚫 Вы заблокированы!", show_alert=True)
+                    except:
+                        pass
+                    return None
 
-    text = f"""
-🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
+        return await handler(event, data)
 
-👤 <b>Имя:</b> {user.get('first_name') or 'Неизвестно'}
-📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
 
-💰 <b>Монеты:</b> {user['balance_coins']}
-💎 <b>Донат-коины:</b> {user['balance_donate']}
+# ====== ВЕБ-СЕРВЕР (для хостинга) ======
+async def health_handler(request):
+    """Health-check для хостинга"""
+    return web.Response(text="🤠 Duel Bot is running!", status=200)
 
-⚔️ <b>Статистика дуэлей:</b>
-   🏆 Побед: {user['wins']}
-   💀 Поражений: {user['losses']}
-   📊 Всего игр: {user['duels_played']}
-   📈 Винрейт: {winrate}%
 
-🔄 <b>Восстановления сегодня:</b> {user['recoveries_today']}/{limit}
-⭐ <b>Статус:</b> {status}
+async def run_web_server():
+    """Запускает HTTP-сервер для health-check"""
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
 
-📅 <b>Дата регистрации:</b> {user['created_at'][:10]}
-"""
+    # BotHost и другие хостинги задают PORT
+    port = int(os.getenv("PORT", "8080"))
 
-    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
-    await callback.answer("🔄 Обновлено!")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    logger.info(f"🌐 Веб-сервер запущен на порту {port}")
+
+    # Держим сервер живым
+    while True:
+        await asyncio.sleep(3600)
+
+
+# ====== ЗАПУСК БОТА ======
+async def run_bot():
+    from aiogram.client.default import DefaultBotProperties
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher(storage=MemoryStorage())
+
+    dp.update.middleware(BanCheckMiddleware())
+
+    await db.init()
+    logger.info("База данных инициализирована")
+
+    dp.include_router(start_router)
+    dp.include_router(duel_router)
+    dp.include_router(profile_router)
+    dp.include_router(shop_router)
+    dp.include_router(referral_router)
+    dp.include_router(admin_router)
+
+    asyncio.create_task(daily_reset_scheduler())
+    logger.info("Планировщик запущен")
+
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Бот запущен!")
+
+    await dp.start_polling(bot)
+
+
+async def main():
+    """Запускает бота и веб-сервер параллельно"""
+    await asyncio.gather(
+        run_bot(),
+        run_web_server()
+    )
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен")

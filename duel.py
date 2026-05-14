@@ -1,447 +1,611 @@
-"""Хендлеры дуэлей"""
+"""Асинхронная база данных SQLite"""
 
-import asyncio
-import random
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
+import aiosqlite
+import datetime
+from typing import Optional, List, Dict, Any
+from config import START_COINS
 
-from database import db
-from states import MainMenu, DuelState
-from keyboards import duel_opponent_select_kb, duel_invite_kb, main_menu_kb, back_to_menu_kb
-from helpers import format_user_name, get_duel_frames
+import os
+from config import DB_PATH
 
-router = Router()
-
-# Хранилище активных таймеров дуэлей: {duel_id: asyncio.Task}
-active_timers = {}
+# Создаём директорию для БД если её нет
+os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
 
 
-@router.message(F.text == "⚔️ Дуэль")
-async def start_duel(message: Message, state: FSMContext, bot: Bot):
-    user_id = message.from_user.id
-    user = await db.get_user(user_id)
+class Database:
+    def __init__(self):
+        self.db_path = DB_PATH
 
-    if not user:
-        await message.answer("❌ Сначала нажмите /start")
-        return
+    async def init(self):
+        """Инициализация таблиц"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Пользователи
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    balance_coins INTEGER DEFAULT {START_COINS},
+                    balance_donate INTEGER DEFAULT 0,
+                    is_vip INTEGER DEFAULT 0,
+                    referral_code TEXT UNIQUE,
+                    referred_by INTEGER DEFAULT NULL,
+                    wins INTEGER DEFAULT 0,
+                    losses INTEGER DEFAULT 0,
+                    duels_played INTEGER DEFAULT 0,
+                    recoveries_today INTEGER DEFAULT 0,
+                    last_recovery_time TIMESTAMP,
+                    last_reset_date DATE,
+                    subscribed_channel INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (referred_by) REFERENCES users(telegram_id)
+                )
+            """.format(START_COINS=START_COINS))
 
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+            # Дуэли
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS duels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    challenger_id INTEGER NOT NULL,
+                    opponent_id INTEGER NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    winner_id INTEGER,
+                    bet INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    FOREIGN KEY (challenger_id) REFERENCES users(telegram_id),
+                    FOREIGN KEY (opponent_id) REFERENCES users(telegram_id)
+                )
+            """)
 
-    if user["balance_coins"] < duel_cost:
-        can_recover = await db.can_recover(user_id)
-        if can_recover:
-            await db.recover_coin(user_id)
-            user = await db.get_user(user_id)
-            recovery_limit = await db.get_recovery_limit(user_id)
-            await message.answer(
-                f"💰 <b>Восстановление!</b>\n\n"
-                f"Вам начислена 1 монета (восстановление {user['recoveries_today']}/"
-                f"{recovery_limit}).\n"
-                f"Теперь у вас {user['balance_coins']} монет."
+            # Транзакции
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    currency TEXT NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+                )
+            """)
+
+            # Реферальные награды (чтобы не дублировать)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS referral_rewards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    inviter_id INTEGER NOT NULL,
+                    referral_id INTEGER NOT NULL,
+                    duels_at_reward INTEGER DEFAULT 0,
+                    rewarded INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(inviter_id, referral_id)
+                )
+            """)
+
+            
+            # Настройки экономики (динамические)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS economy_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    description TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Заполняем дефолтные значения если таблица пустая
+            async with db.execute("SELECT COUNT(*) as c FROM economy_settings") as c:
+                count = (await c.fetchone())[0]
+
+            if count == 0:
+                defaults = [
+                    ("max_coins", "99999", "Максимальный баланс монет у игрока"),
+                    ("recovery_interval_minutes", "6", "Минут между восстановлениями при балансе 0"),
+                    ("win_multiplier", "2", "Множитель выигрыша (ставка × множитель)"),
+                    ("daily_recovery_limit_default", "5", "Лимит восстановлений в день (обычный)"),
+                    ("daily_recovery_limit_vip", "15", "Лимит восстановлений в день (VIP)"),
+                    ("start_coins", "10", "Стартовый баланс монет"),
+                    ("duel_cost", "1", "Стоимость дуэли"),
+                ]
+                await db.executemany(
+                    "INSERT OR IGNORE INTO economy_settings (key, value, description) VALUES (?, ?, ?)",
+                    defaults
+                )
+            await db.commit()
+
+    # === ПОЛЬЗОВАТЕЛИ ===
+
+    async def get_user(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def create_user(self, telegram_id: int, username: str, first_name: str, 
+                         referral_code: str, referred_by: Optional[int] = None, 
+                         start_coins: int = 10):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO users (telegram_id, username, first_name, referral_code, referred_by, balance_coins)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (telegram_id, username, first_name, referral_code, referred_by, start_coins))
+            await db.commit()
+
+    async def update_username(self, telegram_id: int, username: str, first_name: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET username = ?, first_name = ? WHERE telegram_id = ?",
+                (username, first_name, telegram_id)
             )
-        else:
-            limit = await db.get_recovery_limit(user_id)
-            if user["recoveries_today"] >= limit:
-                await message.answer(
-                    f"❌ <b>Монеты закончились!</b>\n\n"
-                    f"Вы использовали все восстановления на сегодня ({limit}/{limit}).\n"
-                    f"Следующее обновление в 00:00 по МСК.\n\n"
-                    f"💎 Можно купить монеты в магазине или приобрести VIP!",
-                    reply_markup=main_menu_kb()
-                )
-            else:
-                recovery_min = await db.get_economy_setting_int("recovery_interval_minutes", 6)
-                await message.answer(
-                    f"❌ <b>Недостаточно монет!</b>\n\n"
-                    f"Баланс: {user['balance_coins']} монет\n"
-                    f"Следующее восстановление через {recovery_min} минут.\n\n"
-                    f"💎 Или купите монеты в магазине!",
-                    reply_markup=main_menu_kb()
-                )
-            return
+            await db.commit()
 
-    all_users = await db.get_all_users()
-    opponents = [u for u in all_users if u["telegram_id"] != user_id and u["subscribed_channel"]]
+    async def set_subscribed(self, telegram_id: int, status: bool = True):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET subscribed_channel = ? WHERE telegram_id = ?",
+                (1 if status else 0, telegram_id)
+            )
+            await db.commit()
 
-    if not opponents:
-        await message.answer(
-            "😕 <b>Пока нет доступных соперников!</b>\n\n"
-            "Пригласите друзей по реферальной ссылке или введите @username!",
-            reply_markup=main_menu_kb()
-        )
-        return
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM users") as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
-    await state.set_state(DuelState.selecting_opponent)
-    await message.answer(
-        "🎯 <b>Выберите соперника для дуэли:</b>\n\n"
-        f"💰 Ваш баланс: {user['balance_coins']} монет\n\n"
-        "Или пригласите друга по @username:",
-        reply_markup=duel_opponent_select_kb(opponents)
-    )
+    async def get_user_by_referral(self, referral_code: str) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM users WHERE referral_code = ?", (referral_code,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    # === БАЛАНС ===
+
+    async def add_coins(self, telegram_id: int, amount: int, description: str = ""):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_coins = balance_coins + ? WHERE telegram_id = ?",
+                (amount, telegram_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "add", amount, "coins", description)
+            )
+            await db.commit()
+
+    async def remove_coins(self, telegram_id: int, amount: int, description: str = ""):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_coins = balance_coins - ? WHERE telegram_id = ?",
+                (amount, telegram_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "remove", amount, "coins", description)
+            )
+            await db.commit()
+
+    async def add_donate(self, telegram_id: int, amount: int, description: str = ""):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_donate = balance_donate + ? WHERE telegram_id = ?",
+                (amount, telegram_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "add", amount, "donate", description)
+            )
+            await db.commit()
+
+    async def remove_donate(self, telegram_id: int, amount: int, description: str = ""):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_donate = balance_donate - ? WHERE telegram_id = ?",
+                (amount, telegram_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "remove", amount, "donate", description)
+            )
+            await db.commit()
+
+    async def set_vip(self, telegram_id: int, status: bool = True):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET is_vip = ? WHERE telegram_id = ?",
+                (1 if status else 0, telegram_id)
+            )
+            await db.commit()
+
+    # === ВОССТАНОВЛЕНИЕ МОНЕТ ===
+
+    async def get_recovery_limit(self, telegram_id: int) -> int:
+        user = await self.get_user(telegram_id)
+        if not user:
+            return await self.get_economy_setting_int("daily_recovery_limit_default", 5)
+        limit_default = await self.get_economy_setting_int("daily_recovery_limit_default", 5)
+        limit_vip = await self.get_economy_setting_int("daily_recovery_limit_vip", 15)
+        return limit_vip if user["is_vip"] else limit_default
+
+    async def can_recover(self, telegram_id: int) -> bool:
+        user = await self.get_user(telegram_id)
+        if not user:
+            return False
+        if user["balance_coins"] != 0:
+            return False
+
+        limit = await self.get_recovery_limit(telegram_id)
+        if user["recoveries_today"] >= limit:
+            return False
+
+        if user["last_recovery_time"]:
+            last = datetime.datetime.fromisoformat(user["last_recovery_time"])
+            now = datetime.datetime.now()
+            recovery_min = await self.get_economy_setting_int("recovery_interval_minutes", 6)
+            if (now - last).total_seconds() < recovery_min * 60:
+                return False
+
+        return True
+
+    async def recover_coin(self, telegram_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now().isoformat()
+            await db.execute("""
+                UPDATE users 
+                SET balance_coins = balance_coins + ?, 
+                    recoveries_today = recoveries_today + 1,
+                    last_recovery_time = ?
+                WHERE telegram_id = ?
+            """, (RECOVERY_AMOUNT, now, telegram_id))
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "recovery", RECOVERY_AMOUNT, "coins", "Восстановление при балансе 0")
+            )
+            await db.commit()
+
+    async def reset_recovery_count(self, telegram_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET recoveries_today = 0 WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            await db.commit()
+
+    async def set_last_reset_date(self, telegram_id: int, date_str: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET last_reset_date = ? WHERE telegram_id = ?",
+                (date_str, telegram_id)
+            )
+            await db.commit()
+
+    # === СТАТИСТИКА ===
+
+    async def add_win(self, telegram_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET wins = wins + 1, duels_played = duels_played + 1 WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            await db.commit()
+
+    async def add_loss(self, telegram_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET losses = losses + 1, duels_played = duels_played + 1 WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            await db.commit()
+
+    # === ДУЭЛИ ===
+
+    async def create_duel(self, challenger_id: int, opponent_id: int, bet: int = 1) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO duels (challenger_id, opponent_id, bet, status) VALUES (?, ?, ?, ?)",
+                (challenger_id, opponent_id, bet, "pending")
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_duel(self, duel_id: int) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM duels WHERE id = ?", (duel_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def update_duel_status(self, duel_id: int, status: str, winner_id: Optional[int] = None):
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now().isoformat()
+            await db.execute(
+                "UPDATE duels SET status = ?, winner_id = ?, completed_at = ? WHERE id = ?",
+                (status, winner_id, now, duel_id)
+            )
+            await db.commit()
+
+    async def get_pending_duel_for_user(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM duels WHERE (challenger_id = ? OR opponent_id = ?) AND status = ? ORDER BY id DESC LIMIT 1",
+                (telegram_id, telegram_id, "pending")
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    # === РЕФЕРАЛКА ===
+
+    async def create_referral_reward(self, inviter_id: int, referral_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO referral_rewards (inviter_id, referral_id) VALUES (?, ?)",
+                (inviter_id, referral_id)
+            )
+            await db.commit()
+
+    async def update_referral_duels(self, referral_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE referral_rewards SET duels_at_reward = duels_at_reward + 1 WHERE referral_id = ? AND rewarded = 0",
+                (referral_id,)
+            )
+            await db.commit()
+
+    async def check_referral_reward(self, inviter_id: int, referral_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM referral_rewards WHERE inviter_id = ? AND referral_id = ? AND rewarded = 0",
+                (inviter_id, referral_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row and row["duels_at_reward"] >= 18
+
+    async def mark_referral_rewarded(self, inviter_id: int, referral_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE referral_rewards SET rewarded = 1 WHERE inviter_id = ? AND referral_id = ?",
+                (inviter_id, referral_id)
+            )
+            await db.commit()
+
+    async def get_referral_stats(self, telegram_id: int) -> Dict[str, Any]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Количество рефералов
+            async with db.execute(
+                "SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (telegram_id,)
+            ) as cursor:
+                total = (await cursor.fetchone())[0]
+
+            # Количество награжденных
+            async with db.execute(
+                "SELECT COUNT(*) as count FROM referral_rewards WHERE inviter_id = ? AND rewarded = 1",
+                (telegram_id,)
+            ) as cursor:
+                rewarded = (await cursor.fetchone())[0]
+
+            return {"total": total, "rewarded": rewarded}
 
 
-@router.callback_query(F.data.startswith("duel_page:"))
-async def duel_pagination(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split(":")[1])
-    all_users = await db.get_all_users()
-    user_id = callback.from_user.id
-    opponents = [u for u in all_users if u["telegram_id"] != user_id and u["subscribed_channel"]]
-
-    await callback.message.edit_reply_markup(
-        reply_markup=duel_opponent_select_kb(opponents, page=page)
-    )
-    await callback.answer()
 
 
-@router.callback_query(F.data == "duel_by_username")
-async def duel_by_username_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(DuelState.entering_username)
-    await callback.message.edit_text(
-        "✏️ <b>Пригласить на дуэль по @username</b>\n\n"
-        "Введите юзернейм соперника (например: @ivan):\n\n"
-        "⚠️ Соперник должен быть зарегистрирован в боте и подписан на канал.",
-        reply_markup=back_to_menu_kb(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    # === АДМИН-ПАНЕЛЬ ===
 
+    async def get_users_paginated(self, page: int = 0, per_page: int = 10) -> tuple:
+        """Получить пользователей с пагинацией. Возвращает (список, общее_количество)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            offset = page * per_page
 
-@router.message(DuelState.entering_username)
-async def duel_by_username_process(message: Message, state: FSMContext, bot: Bot):
-    username_input = message.text.strip().lstrip("@")
-    challenger_id = message.from_user.id
+            async with db.execute(
+                "SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (per_page, offset)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                users = [dict(row) for row in rows]
 
-    if not username_input:
-        await message.answer("❌ Введите корректный @username!")
-        return
+            async with db.execute("SELECT COUNT(*) as total FROM users") as cursor:
+                total = (await cursor.fetchone())[0]
 
-    all_users = await db.get_all_users()
-    opponent = None
-    for u in all_users:
-        if u.get("username") and u["username"].lower() == username_input.lower():
-            opponent = u
-            break
+            return users, total
 
-    if not opponent:
-        await message.answer(
-            f"❌ Игрок <b>@{username_input}</b> не найден!\n\n"
-            f"Убедитесь, что он:\n"
-            f"• Зарегистрирован в боте\n"
-            f"• Имеет установленный @username\n"
-            f"• Подписан на канал",
-            reply_markup=back_to_menu_kb(),
-            parse_mode="HTML"
-        )
-        await state.set_state(DuelState.selecting_opponent)
-        return
+    async def search_users(self, query: str) -> list:
+        """Поиск пользователей по ID, username или first_name"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            search = f"%{query}%"
 
-    opponent_id = opponent["telegram_id"]
-
-    if opponent_id == challenger_id:
-        await message.answer("❌ Нельзя вызвать самого себя!")
-        return
-
-    if not opponent.get("subscribed_channel"):
-        await message.answer(
-            f"❌ <b>@{username_input}</b> не подписан на канал и не может участвовать в дуэлях.",
-            reply_markup=back_to_menu_kb(),
-            parse_mode="HTML"
-        )
-        await state.set_state(DuelState.selecting_opponent)
-        return
-
-    challenger = await db.get_user(challenger_id)
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
-
-    if challenger["balance_coins"] < duel_cost:
-        await message.answer("❌ Недостаточно монет!")
-        await state.set_state(MainMenu.main)
-        return
-
-    await state.set_state(MainMenu.main)
-    await send_duel_invite(bot, challenger_id, opponent_id, message, state)
-
-
-async def _timer_task(bot: Bot, duel_id: int, dots_msg, timeout: int):
-    """Фоновая задача таймера с обратным отсчётом"""
-    start_time = asyncio.get_event_loop().time()
-
-    while True:
-        elapsed = asyncio.get_event_loop().time() - start_time
-        if elapsed >= timeout:
-            break
-
-        remaining = int(timeout - elapsed)
-        dots = [".", "..", "..."][int(elapsed * 2) % 3]
-
-        try:
-            await dots_msg.edit_text(f"⏳ Ждём ответа{dots} ({remaining} сек)")
-        except:
-            pass
-
-        await asyncio.sleep(0.5)
-
-        # Проверяем, не отменена ли дуэль
-        duel = await db.get_duel(duel_id)
-        if duel and duel["status"] != "pending":
+            # Пробуем как ID
             try:
-                await dots_msg.delete()
-            except:
-                pass
-            return
+                telegram_id = int(query)
+                async with db.execute(
+                    "SELECT * FROM users WHERE telegram_id = ? OR username LIKE ? OR first_name LIKE ?",
+                    (telegram_id, search, search)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+            except ValueError:
+                async with db.execute(
+                    "SELECT * FROM users WHERE username LIKE ? OR first_name LIKE ?",
+                    (search, search)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
 
-    # Таймаут — проверяем ещё раз
-    duel = await db.get_duel(duel_id)
-    if duel and duel["status"] == "pending":
-        await _handle_timeout(bot, duel_id)
+    async def get_user_transactions(self, telegram_id: int, limit: int = 50) -> list:
+        """Получить транзакции пользователя"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (telegram_id, limit)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
+    async def get_all_duels(self, limit: int = 50) -> list:
+        """Получить все дуэли"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM duels ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
-async def _handle_timeout(bot: Bot, duel_id: int):
-    """Обработка таймаута дуэли"""
-    duel = await db.get_duel(duel_id)
-    if not duel or duel["status"] != "pending":
-        return
+    async def set_user_field(self, telegram_id: int, field: str, value):
+        """Универсальное обновление поля пользователя (для админа)"""
+        allowed_fields = [
+            "balance_coins", "balance_donate", "is_vip", "is_banned",
+            "wins", "losses", "duels_played", "recoveries_today", "subscribed_channel"
+        ]
+        if field not in allowed_fields:
+            raise ValueError(f"Поле {field} недоступно для изменения")
 
-    challenger_id = duel["challenger_id"]
-    opponent_id = duel["opponent_id"]
-    duel_cost = duel["bet"]
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"UPDATE users SET {field} = ? WHERE telegram_id = ?",
+                (value, telegram_id)
+            )
+            await db.commit()
 
-    challenger = await db.get_user(challenger_id)
-    opponent = await db.get_user(opponent_id)
+    async def ban_user(self, telegram_id: int, reason: str = ""):
+        """Забанить пользователя"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET is_banned = 1 WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, currency, description) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, "ban", 0, "system", f"Бан: {reason}")
+            )
+            await db.commit()
 
-    await db.update_duel_status(duel_id, "expired")
-    await db.add_coins(challenger_id, duel_cost, "Возврат ставки (таймаут)")
+    async def unban_user(self, telegram_id: int):
+        """Разбанить пользователя"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET is_banned = 0 WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            await db.commit()
 
-    try:
-        await bot.send_message(
-            opponent_id,
-            "⏰ <b>Время вышло!</b> Заявка истекла.",
-            parse_mode="HTML"
-        )
-    except:
-        pass
+    async def get_bot_stats(self) -> dict:
+        """Статистика бота"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            stats = {}
 
-    try:
-        await bot.send_message(
-            challenger_id,
-            f"😏 <b>{format_user_name(opponent)} испугался!</b>\n\n"
-            f"Соперник не ответил на вызов в течение 30 секунд.\n"
-            f"💰 {duel_cost} монета возвращена.\n\n"
-            f"🔥 Попробуйте вызвать кого-то другого!",
-            reply_markup=main_menu_kb(),
-            parse_mode="HTML"
-        )
-    except:
-        pass
+            # Всего пользователей
+            async with db.execute("SELECT COUNT(*) as c FROM users") as c:
+                stats["total_users"] = (await c.fetchone())[0]
 
-    active_timers.pop(duel_id, None)
+            # VIP пользователей
+            async with db.execute("SELECT COUNT(*) as c FROM users WHERE is_vip = 1") as c:
+                stats["vip_users"] = (await c.fetchone())[0]
 
+            # Забаненных
+            async with db.execute("SELECT COUNT(*) as c FROM users WHERE is_banned = 1") as c:
+                stats["banned_users"] = (await c.fetchone())[0]
 
-async def send_duel_invite(bot: Bot, challenger_id: int, opponent_id: int, message_or_callback, state: FSMContext):
-    """Отправляет приглашение на дуэль с таймаутом 30 секунд"""
+            # Всего дуэлей
+            async with db.execute("SELECT COUNT(*) as c FROM duels") as c:
+                stats["total_duels"] = (await c.fetchone())[0]
 
-    challenger = await db.get_user(challenger_id)
-    opponent = await db.get_user(opponent_id)
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+            # Завершённых дуэлей
+            async with db.execute("SELECT COUNT(*) as c FROM duels WHERE status = 'completed'") as c:
+                stats["completed_duels"] = (await c.fetchone())[0]
 
-    await db.remove_coins(challenger_id, duel_cost, "Ставка в дуэли")
+            # Общий баланс монет
+            async with db.execute("SELECT COALESCE(SUM(balance_coins), 0) as s FROM users") as c:
+                stats["total_coins"] = (await c.fetchone())[0]
 
-    duel_id = await db.create_duel(challenger_id, opponent_id, duel_cost)
+            # Общий баланс DC
+            async with db.execute("SELECT COALESCE(SUM(balance_donate), 0) as s FROM users") as c:
+                stats["total_donate"] = (await c.fetchone())[0]
 
-    challenger_name = format_user_name(challenger)
-    opponent_name = format_user_name(opponent)
+            # Топ по победам
+            async with db.execute(
+                "SELECT telegram_id, first_name, username, wins FROM users ORDER BY wins DESC LIMIT 5"
+            ) as c:
+                stats["top_winners"] = [dict(row) for row in await c.fetchall()]
 
-    await bot.send_message(
-        opponent_id,
-        f"⚔️ <b>Вас вызывают на дуэль!</b>\n\n"
-        f"👤 <b>{challenger_name}</b> бросает вам вызов!\n\n"
-        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
-        f"⏳ У вас есть <b>30 секунд</b> на ответ!",
-        reply_markup=duel_invite_kb(duel_id),
-        parse_mode="HTML"
-    )
+            return stats
 
-    await bot.send_message(
-        challenger_id,
-        f"⚔️ <b>Заявка отправлена!</b>\n\n"
-        f"Вы бросили вызов <b>{opponent_name}</b>\n"
-        f"💰 Ставка: <b>{duel_cost} монета</b>\n\n"
-        f"⏳ Ждём ответа соперника в течение <b>30 секунд</b>...",
-        parse_mode="HTML"
-    )
-
-    dots_msg = await bot.send_message(opponent_id, "⏳ Ждём ответа... (30 сек)")
-
-    task = asyncio.create_task(_timer_task(bot, duel_id, dots_msg, 30))
-    active_timers[duel_id] = task
-
-
-@router.callback_query(F.data.startswith("duel_challenge:"))
-async def send_duel_invite_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    challenger_id = callback.from_user.id
-    opponent_id = int(callback.data.split(":")[1])
-
-    if challenger_id == opponent_id:
-        await callback.answer("❌ Нельзя вызвать самого себя!", show_alert=True)
-        return
-
-    challenger = await db.get_user(challenger_id)
-    opponent = await db.get_user(opponent_id)
-
-    if not challenger or not opponent:
-        await callback.answer("❌ Ошибка!", show_alert=True)
-        return
-
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
-
-    if challenger["balance_coins"] < duel_cost:
-        await callback.answer("❌ Недостаточно монет!", show_alert=True)
-        return
-
-    await callback.answer("⚔️ Заявка отправлена!")
-    await state.set_state(MainMenu.main)
-    await send_duel_invite(bot, challenger_id, opponent_id, callback, state)
-
-
-@router.callback_query(F.data.startswith("duel_accept:"))
-async def accept_duel(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    duel_id = int(callback.data.split(":")[1])
-    opponent_id = callback.from_user.id
-
-    duel = await db.get_duel(duel_id)
-    if not duel or duel["status"] != "pending":
-        await callback.answer("❌ Дуэль уже недоступна!", show_alert=True)
-        return
-
-    challenger_id = duel["challenger_id"]
-
-    if opponent_id != duel["opponent_id"]:
-        await callback.answer("❌ Это не ваша дуэль!", show_alert=True)
-        return
-
-    # Отменяем таймер
-    task = active_timers.pop(duel_id, None)
-    if task:
-        task.cancel()
-
-    opponent = await db.get_user(opponent_id)
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
-
-    if opponent["balance_coins"] < duel_cost:
-        await callback.answer("❌ У вас недостаточно монет!", show_alert=True)
-        await db.add_coins(challenger_id, duel_cost, "Возврат ставки (недостаточно монет)")
-        await db.update_duel_status(duel_id, "cancelled")
-        return
-
-    await db.remove_coins(opponent_id, duel_cost, "Ставка в дуэли")
-    await db.update_duel_status(duel_id, "active")
-
-    await callback.message.edit_text("✅ <b>Вы приняли вызов!</b>\n\nДуэль начинается...")
-
-    await run_duel_animation(bot, challenger_id, opponent_id, duel_id)
-
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("duel_decline:"))
-async def decline_duel(callback: CallbackQuery, bot: Bot):
-    duel_id = int(callback.data.split(":")[1])
-    opponent_id = callback.from_user.id
-
-    duel = await db.get_duel(duel_id)
-    if not duel or duel["status"] != "pending":
-        await callback.answer("❌ Дуэль уже недоступна!", show_alert=True)
-        return
-
-    # Отменяем таймер
-    task = active_timers.pop(duel_id, None)
-    if task:
-        task.cancel()
-
-    challenger_id = duel["challenger_id"]
-    duel_cost = duel["bet"]
-
-    await db.add_coins(challenger_id, duel_cost, "Возврат ставки (отказ)")
-    await db.update_duel_status(duel_id, "declined")
-
-    await callback.message.edit_text("❌ <b>Вы отклонили вызов.</b>")
-    await bot.send_message(
-        challenger_id,
-        f"❌ <b>{format_user_name(await db.get_user(opponent_id))}</b> отклонил ваш вызов.\n"
-        f"💰 {duel_cost} монета возвращена.",
-        reply_markup=main_menu_kb()
-    )
-    await callback.answer()
-
-
-async def run_duel_animation(bot: Bot, challenger_id: int, opponent_id: int, duel_id: int):
-    """Анимация перестрелки для обоих игроков"""
-    frames = get_duel_frames()
-    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
-
-    msg_ch = await bot.send_message(challenger_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n" + frames[0], parse_mode="HTML")
-    msg_op = await bot.send_message(opponent_id, "⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n" + frames[0], parse_mode="HTML")
-
-    for i, frame in enumerate(frames[1:], 1):
-        await asyncio.sleep(1.2)
-        text = f"⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n{frame}"
-        try:
-            await msg_ch.edit_text(text, parse_mode="HTML")
-        except:
-            pass
-        try:
-            await msg_op.edit_text(text, parse_mode="HTML")
-        except:
-            pass
-
-    await asyncio.sleep(0.5)
-
-    winner_id = random.choice([challenger_id, opponent_id])
-    loser_id = opponent_id if winner_id == challenger_id else challenger_id
-
-    await db.add_win(winner_id)
-    await db.add_loss(loser_id)
-    await db.update_duel_status(duel_id, "completed", winner_id)
-
-    win_multiplier = await db.get_economy_setting_int("win_multiplier", 2)
-    await db.add_coins(winner_id, duel_cost * win_multiplier, "Выигрыш в дуэли")
-
-    for uid in [challenger_id, opponent_id]:
-        user = await db.get_user(uid)
-        if user and user["referred_by"]:
-            await db.update_referral_duels(uid)
-            if await db.check_referral_reward(user["referred_by"], uid):
-                from config import REFERRAL_REWARD_DC
-                await db.add_donate(user["referred_by"], REFERRAL_REWARD_DC, 
-                                   f"Бонус за 18 дуэлей реферала {uid}")
-                await db.mark_referral_rewarded(user["referred_by"], uid)
-                await bot.send_message(
-                    user["referred_by"],
-                    f"🎉 <b>Реферальный бонус!</b>\n\n"
-                    f"Ваш реферал сыграл 18 дуэлей!\n"
-                    f"💎 Получено {REFERRAL_REWARD_DC} донат-коина!"
+    async def admin_log(self, admin_id: int, action: str, target_id: int, details: str = ""):
+        """Логирование действий админа"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS admin_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    target_id INTEGER,
+                    details TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+            await db.execute(
+                "INSERT INTO admin_logs (admin_id, action, target_id, details) VALUES (?, ?, ?, ?)",
+                (admin_id, action, target_id, details)
+            )
+            await db.commit()
 
-    winner = await db.get_user(winner_id)
-    loser = await db.get_user(loser_id)
 
-    await msg_ch.edit_text(
-        f"{'🏆' if winner_id == challenger_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>\n\n"
-        f"{'🎉 Вы победили!' if winner_id == challenger_id else '💔 Вы проиграли...'}\n\n"
-        f"💰 {'+' if winner_id == challenger_id else '-'}{duel_cost} монета\n"
-        f"📊 Баланс: {winner['balance_coins'] if winner_id == challenger_id else loser['balance_coins']} монет",
-        parse_mode="HTML"
-    )
+    # === ДИНАМИЧЕСКАЯ ЭКОНОМИКА ===
 
-    await msg_op.edit_text(
-        f"{'🏆' if winner_id == opponent_id else '💀'} <b>РЕЗУЛЬТАТ ДУЭЛИ</b>\n\n"
-        f"{'🎉 Вы победили!' if winner_id == opponent_id else '💔 Вы проиграли...'}\n\n"
-        f"💰 {'+' if winner_id == opponent_id else '-'}{duel_cost} монета\n"
-        f"📊 Баланс: {winner['balance_coins'] if winner_id == opponent_id else loser['balance_coins']} монет",
-        parse_mode="HTML"
-    )
+    async def get_economy_setting(self, key: str, default: str = "") -> str:
+        """Получить значение настройки экономики"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT value FROM economy_settings WHERE key = ?", (key,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row["value"] if row else default
 
-    await asyncio.sleep(3)
-    await bot.send_message(challenger_id, "🏠 Возвращаемся в меню...", reply_markup=main_menu_kb())
-    await bot.send_message(opponent_id, "🏠 Возвращаемся в меню...", reply_markup=main_menu_kb())
+    async def get_economy_setting_int(self, key: str, default: int = 0) -> int:
+        """Получить значение как int"""
+        val = await self.get_economy_setting(key, str(default))
+        try:
+            return int(val)
+        except ValueError:
+            return default
+
+    async def set_economy_setting(self, key: str, value: str):
+        """Установить значение настройки экономики"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now().isoformat()
+            await db.execute(
+                "INSERT INTO economy_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, value, now)
+            )
+            await db.commit()
+
+    async def get_all_economy_settings(self) -> list:
+        """Получить все настройки экономики"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM economy_settings ORDER BY key"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+db = Database()
