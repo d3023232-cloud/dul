@@ -203,7 +203,7 @@ async def confirm_purchase(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ShopState.main)
         return
 
-    parts = callback.data.split(":")
+    parts = callback.data.split(":", 2)
     item_from_callback = parts[1]
     price_from_callback = int(parts[2])
 
