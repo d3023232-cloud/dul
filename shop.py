@@ -12,16 +12,6 @@ from config import VIP_PRICE, RESET_LIMIT_PRICE, COIN_PRICE_DC
 router = Router()
 
 
-async def _check_donate_balance(user_id: int, price: int) -> tuple:
-    """Возвращает (user, error_text)"""
-    user = await db.get_user(user_id)
-    if not user:
-        return None, "❌ Пользователь не найден"
-    if user["balance_donate"] < price:
-        return user, f"❌ Недостаточно DC!\nНужно: {price}\nУ вас: {user['balance_donate']}"
-    return user, None
-
-
 @router.message(F.text == "🛒 Магазин")
 async def open_shop(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
@@ -203,18 +193,45 @@ async def confirm_purchase(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ShopState.main)
         return
 
-    parts = callback.data.split(":", 2)
-    item_from_callback = parts[1]
-    price_from_callback = int(parts[2])
-
-    if item_from_callback != purchase_item or price_from_callback != purchase_price:
-        await callback.answer("❌ Ошибка: несоответствие данных покупки", show_alert=True)
+    # Разбираем callback.data: confirm_buy:coins:15:75 или confirm_buy:vip:299
+    # Убираем префикс confirm_buy:
+    rest = callback.data[len("confirm_buy:"):]
+    # Находим цену — последнее число после последнего двоеточия
+    if ":" not in rest:
+        await callback.answer("❌ Ошибка формата данных", show_alert=True)
         await state.set_state(ShopState.main)
         return
 
-    user, error = await _check_donate_balance(user_id, purchase_price)
-    if error:
-        await callback.answer(error, show_alert=True)
+    last_colon = rest.rfind(":")
+    item_from_callback = rest[:last_colon]
+    try:
+        price_from_callback = int(rest[last_colon + 1:])
+    except ValueError:
+        await callback.answer("❌ Ошибка формата цены", show_alert=True)
+        await state.set_state(ShopState.main)
+        return
+
+    if item_from_callback != purchase_item or price_from_callback != purchase_price:
+        await callback.answer(
+            f"❌ Ошибка: несоответствие данных покупки\n"
+            f"Ожидалось: {purchase_item} за {purchase_price} DC\n"
+            f"Получено: {item_from_callback} за {price_from_callback} DC",
+            show_alert=True
+        )
+        await state.set_state(ShopState.main)
+        return
+
+    # Повторная проверка баланса
+    user = await db.get_user(user_id)
+    if not user:
+        await callback.answer("❌ Пользователь не найден", show_alert=True)
+        await state.set_state(ShopState.main)
+        return
+    if user["balance_donate"] < purchase_price:
+        await callback.answer(
+            f"❌ Недостаточно DC!\nНужно: {purchase_price}\nУ вас: {user['balance_donate']}",
+            show_alert=True
+        )
         await state.set_state(ShopState.main)
         return
 
