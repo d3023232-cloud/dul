@@ -1,4 +1,4 @@
-"""Хендлеры профиля"""
+"""Хендлеры реферальной системы"""
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -6,14 +6,13 @@ from aiogram.fsm.context import FSMContext
 
 from database import db
 from states import MainMenu
-from keyboards import profile_kb, main_menu_kb
-from helpers import calculate_winrate
+from keyboards import referral_kb, main_menu_kb
 
 router = Router()
 
 
-@router.message(F.text == "👤 Профиль")
-async def show_profile(message: Message, state: FSMContext):
+@router.message(F.text == "🔗 Рефералка")
+async def show_referral(message: Message, state: FSMContext):
     user_id = message.from_user.id
     user = await db.get_user(user_id)
 
@@ -21,67 +20,50 @@ async def show_profile(message: Message, state: FSMContext):
         await message.answer("❌ Сначала нажмите /start")
         return
 
-    winrate = calculate_winrate(user["wins"], user["losses"])
-    status = "👑 VIP" if user["is_vip"] else "🤠 Обычный"
-    limit = await db.get_recovery_limit(user_id)
+    bot_info = await message.bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start={user['referral_code']}"
+    stats = await db.get_referral_stats(user_id)
 
-    text = f"""
-🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
+    text = (
+        "🔗 <b>Реферальная программа</b>\n\n"
+        f"📢 <b>Ваша ссылка:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"   👥 Всего рефералов: {stats['total']}\n"
+        f"   🎁 Получили бонус: {stats['rewarded']}\n\n"
+        f"🎁 <b>Награды за реферала:</b>\n"
+        f"   • Вы получаете: <b>2 монеты + 1 DC</b>\n"
+        f"   • Реферал получает: <b>5 монет</b>\n"
+        f"   • Когда реферал сыграет 18 дуэлей: <b>3 DC</b>\n\n"
+        f"📤 Поделитесь ссылкой с друзьями!"
+    )
 
-👤 <b>Имя:</b> {user.get('first_name') or 'Неизвестно'}
-📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
-
-💰 <b>Монеты:</b> {user['balance_coins']}
-💎 <b>Донат-коины:</b> {user['balance_donate']}
-
-⚔️ <b>Статистика дуэлей:</b>
-   🏆 Побед: {user['wins']}
-   💀 Поражений: {user['losses']}
-   📊 Всего игр: {user['duels_played']}
-   📈 Винрейт: {winrate}%
-
-🔄 <b>Восстановления сегодня:</b> {user['recoveries_today']}/{limit}
-⭐ <b>Статус:</b> {status}
-
-📅 <b>Дата регистрации:</b> {user['created_at'][:10]}
-"""
-
-    await message.answer(text, reply_markup=profile_kb(), parse_mode="HTML")
+    await message.answer(text, reply_markup=referral_kb(ref_link), parse_mode="HTML")
 
 
-@router.callback_query(F.data == "refresh_profile")
-async def refresh_profile(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
+@router.message(F.text == "📊 Топ игроков")
+async def show_top(message: Message):
+    users = await db.get_all_users()
 
-    if not user:
-        await callback.answer("❌ Ошибка!", show_alert=True)
-        return
+    # Топ по победам
+    top_wins = sorted(users, key=lambda x: x["wins"], reverse=True)[:10]
 
-    winrate = calculate_winrate(user["wins"], user["losses"])
-    status = "👑 VIP" if user["is_vip"] else "🤠 Обычный"
-    limit = await db.get_recovery_limit(user_id)
+    text = "🏆 <b>Топ 10 игроков</b>\n\n"
 
-    text = f"""
-🆔 <b>ID:</b> <code>{user['telegram_id']}</code>
+    text += "<b>📈 По победам:</b>\n"
+    for i, user in enumerate(top_wins, 1):
+        name = user.get("first_name") or user.get("username") or f"User {user['telegram_id']}"
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+        text += f"{medal} {name} — 🏆{user['wins']} / 💀{user['losses']}\n"
 
-👤 <b>Имя:</b> {user.get('first_name') or 'Неизвестно'}
-📛 <b>Юзернейм:</b> @{user.get('username') or 'Нет'}
+    # Топ по монетам
+    top_coins = sorted(users, key=lambda x: x["balance_coins"], reverse=True)[:10]
 
-💰 <b>Монеты:</b> {user['balance_coins']}
-💎 <b>Донат-коины:</b> {user['balance_donate']}
+    text += "\n<b>💰 По балансу монет:</b>\n"
+    for i, user in enumerate(top_coins, 1):
+        name = user.get("first_name") or user.get("username") or f"User {user['telegram_id']}"
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+        vip_badge = "👑" if user.get("is_vip") else ""
+        text += f"{medal} {vip_badge} {name} — 💰{user['balance_coins']} монет\n"
 
-⚔️ <b>Статистика дуэлей:</b>
-   🏆 Побед: {user['wins']}
-   💀 Поражений: {user['losses']}
-   📊 Всего игр: {user['duels_played']}
-   📈 Винрейт: {winrate}%
-
-🔄 <b>Восстановления сегодня:</b> {user['recoveries_today']}/{limit}
-⭐ <b>Статус:</b> {status}
-
-📅 <b>Дата регистрации:</b> {user['created_at'][:10]}
-"""
-
-    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
-    await callback.answer("🔄 Обновлено!")
+    await message.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")

@@ -1,227 +1,150 @@
-"""Хендлеры магазина"""
+"""Хендлеры старта и проверки подписки"""
 
-from aiogram import Router, F
+import asyncio
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 
 from database import db
-from states import MainMenu, ShopState
-from keyboards import shop_kb, buy_coins_kb, confirm_purchase_kb, main_menu_kb, back_to_menu_kb
-from config import VIP_PRICE, RESET_LIMIT_PRICE, COIN_PRICE_DC
+from states import MainMenu
+from keyboards import main_menu_kb, subscribe_kb, back_to_menu_kb
+from helpers import generate_referral_code, should_reset_daily, get_today_msk
+from config import CHANNEL_ID, CHANNEL_LINK, START_COINS
 
 router = Router()
 
 
-@router.message(F.text == "🛒 Магазин")
-async def open_shop(message: Message, state: FSMContext):
-    user = await db.get_user(message.from_user.id)
-    if not user:
-        await message.answer("❌ Сначала нажмите /start")
-        return
+async def get_welcome_text() -> str:
+    """Генерирует приветствие с актуальными значениями из БД"""
+    start_coins = await db.get_economy_setting_int("start_coins", 10)
+    recovery = await db.get_economy_setting_int("recovery_interval_minutes", 6)
+    duel_cost = await db.get_economy_setting_int("duel_cost", 1)
+    limit_default = await db.get_economy_setting_int("daily_recovery_limit_default", 5)
+    limit_vip = await db.get_economy_setting_int("daily_recovery_limit_vip", 15)
 
-    await state.set_state(ShopState.main)
-    await message.answer(
-        f"🛒 <b>Донат-магазин</b>\n\n"
-        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
-        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC\n"
-        f"   └ Увеличивает лимит восстановлений с 5 до 15\n\n"
-        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC\n"
-        f"   └ Обнуляет счётчик восстановлений на сегодня\n\n"
-        f"💰 <b>Покупка монет</b> — {COIN_PRICE_DC} DC = 1 монета",
-        reply_markup=shop_kb(),
-        parse_mode="HTML"
+    return (
+        "🤠 <b>Добро пожаловать в Дуэль Бот!</b> 🤠\n\n"
+        "Здесь ты можешь бросить вызов другим ковбоям на перестрелку!\n\n"
+        "📜 <b>Правила:</b>\n"
+        f"• У каждого игрока <b>{start_coins} монет</b>\n"
+        f"• Дуэль стоит <b>{duel_cost} монету</b>\n"
+        f"• При балансе <b>0</b> — восстановление <b>1 монеты</b> каждые <b>{recovery} минут</b>\n"
+        f"• Обычный игрок: <b>{limit_default} восстановлений</b> в сутки\n"
+        f"• VIP игрок: <b>{limit_vip} восстановлений</b> в сутки\n"
+        "• Сброс лимита каждый день в <b>00:00 по МСК</b>\n\n"
+        "💰 <b>Донат:</b>\n"
+        "• VIP Premium — увеличивает лимит восстановлений\n"
+        "• Сброс лимита — сбрасывает счётчик восстановлений\n"
+        "• Покупка монет — 5 DC = 1 монета\n\n"
+        "⚔️ <b>Готов к дуэли?</b> Выбирай соперника и стреляй первым!"
     )
 
 
-@router.callback_query(F.data == "shop_vip", ShopState.main)
-async def buy_vip(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
+async def check_subscription(bot: Bot, user_id: int) -> bool:
+    """Проверка подписки на канал"""
+    import logging
+    logger = logging.getLogger(__name__)
 
-    if user["is_vip"]:
-        await callback.answer("❌ У вас уже есть VIP!", show_alert=True)
-        return
-
-    if user["balance_donate"] < VIP_PRICE:
-        await callback.answer(f"❌ Недостаточно DC! Нужно {VIP_PRICE} DC", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        f"👑 <b>Покупка VIP Premium</b>\n\n"
-        f"Цена: <b>{VIP_PRICE} DC</b>\n"
-        f"Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
-        f"Подтвердите покупку:",
-        reply_markup=confirm_purchase_kb("vip", VIP_PRICE),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "shop_reset", ShopState.main)
-async def buy_reset(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
-
-    if user["balance_donate"] < RESET_LIMIT_PRICE:
-        await callback.answer(f"❌ Недостаточно DC! Нужно {RESET_LIMIT_PRICE} DC", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        f"🔄 <b>Сброс лимита восстановлений</b>\n\n"
-        f"Цена: <b>{RESET_LIMIT_PRICE} DC</b>\n"
-        f"Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
-        f"Сбросит счётчик восстановлений на сегодня.\n"
-        f"Подтвердите покупку:",
-        reply_markup=confirm_purchase_kb("reset", RESET_LIMIT_PRICE),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "shop_coins", ShopState.main)
-async def buy_coins_menu(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ShopState.buying_coins)
-    user = await db.get_user(callback.from_user.id)
-
-    await callback.message.edit_text(
-        f"💰 <b>Покупка монет</b>\n\n"
-        f"Курс: <b>{COIN_PRICE_DC} DC = 1 монета</b>\n"
-        f"Ваш баланс DC: <b>{user['balance_donate']}</b>\n\n"
-        f"Выберите количество:",
-        reply_markup=buy_coins_kb(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("buy_coins:"), ShopState.buying_coins)
-async def buy_coins_package(callback: CallbackQuery):
-    amount = int(callback.data.split(":")[1])
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
-    cost = amount * COIN_PRICE_DC
-
-    if user["balance_donate"] < cost:
-        await callback.answer(f"❌ Недостаточно DC! Нужно {cost} DC", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        f"💰 <b>Покупка монет</b>\n\n"
-        f"Количество: <b>{amount} монет</b>\n"
-        f"Стоимость: <b>{cost} DC</b>\n\n"
-        f"Подтвердите покупку:",
-        reply_markup=confirm_purchase_kb(f"coins:{amount}", cost),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "buy_coins_custom", ShopState.buying_coins)
-async def buy_coins_custom(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ShopState.entering_custom_amount)
-    await callback.message.edit_text(
-        f"✏️ <b>Введите количество монет для покупки:</b>\n\n"
-        f"Курс: {COIN_PRICE_DC} DC = 1 монета\n"
-        f"Отправьте число:",
-        reply_markup=back_to_menu_kb(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.message(ShopState.entering_custom_amount)
-async def process_custom_amount(message: Message, state: FSMContext):
     try:
-        amount = int(message.text.strip())
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Введите корректное положительное число!")
-        return
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        logger.info(f"[SubscribeCheck] User {user_id} status in {CHANNEL_ID}: {member.status}")
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        logger.error(f"[SubscribeCheck] Error checking user {user_id} in {CHANNEL_ID}: {e}")
+        # Fallback: если проверка не работает, разрешаем доступ
+        # Уберите эту строку, если хотите строгую проверку
+        return False
 
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
-    user = await db.get_user(user_id)
-    cost = amount * COIN_PRICE_DC
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or "Игрок"
 
-    if user["balance_donate"] < cost:
+    user = await db.get_user(user_id)
+
+    if not user:
+        args = message.text.split() if message.text else []
+        referred_by = None
+
+        if len(args) > 1:
+            ref_code = args[1]
+            ref_user = await db.get_user_by_referral(ref_code)
+            if ref_user and ref_user["telegram_id"] != user_id:
+                referred_by = ref_user["telegram_id"]
+                await db.add_coins(referred_by, 2, f"Реферал {user_id}")
+                await db.add_donate(referred_by, 1, f"Реферал {user_id}")
+                await db.create_referral_reward(referred_by, user_id)
+
+        ref_code = generate_referral_code(user_id)
+        start_coins = await db.get_economy_setting_int("start_coins", 10)
+        await db.create_user(user_id, username, first_name, ref_code, referred_by, start_coins)
+
+        if referred_by:
+            await db.add_coins(user_id, 5, "Бонус за реферальную регистрацию")
+    else:
+        await db.update_username(user_id, username, first_name)
+
+    is_subscribed = await check_subscription(bot, user_id)
+    await db.set_subscribed(user_id, is_subscribed)
+
+    if not is_subscribed:
         await message.answer(
-            f"❌ Недостаточно DC!\n\n"
-            f"Нужно: <b>{cost} DC</b>\n"
-            f"У вас: <b>{user['balance_donate']} DC</b>",
-            reply_markup=back_to_menu_kb(),
+            f"👋 <b>Привет, {first_name}!</b>\n\n"
+            f"Для использования бота необходимо подписаться на наш канал:\n\n"
+            f"📢 <b>{CHANNEL_ID}</b>\n"
+            f"🔗 {CHANNEL_LINK}\n\n"
+            f"⚠️ Убедитесь, что вы подписались, и нажмите кнопку ниже:",
+            reply_markup=subscribe_kb(CHANNEL_LINK),
             parse_mode="HTML"
         )
-        await state.set_state(ShopState.main)
         return
 
-    await state.set_state(ShopState.main)
-    await message.answer(
-        f"💰 <b>Покупка монет</b>\n\n"
-        f"Количество: <b>{amount} монет</b>\n"
-        f"Стоимость: <b>{cost} DC</b>\n\n"
-        f"Подтвердите покупку:",
-        reply_markup=confirm_purchase_kb(f"coins:{amount}", cost),
-        parse_mode="HTML"
-    )
-
-
-@router.callback_query(F.data.startswith("confirm_buy:"))
-async def confirm_purchase(callback: CallbackQuery):
-    parts = callback.data.split(":")
-    item = parts[1]
-    price = int(parts[2])
-    user_id = callback.from_user.id
     user = await db.get_user(user_id)
-
-    if user["balance_donate"] < price:
-        await callback.answer("❌ Недостаточно средств!", show_alert=True)
-        return
-
-    await db.remove_donate(user_id, price, f"Покупка {item}")
-
-    if item == "vip":
-        await db.set_vip(user_id, True)
-        await callback.message.edit_text(
-            "🎉 <b>VIP Premium активирован!</b>\n\n"
-            "Теперь ваш лимит восстановлений: <b>15</b> в сутки!",
-            reply_markup=back_to_menu_kb(),
-            parse_mode="HTML"
-        )
-
-    elif item == "reset":
+    if user and should_reset_daily(user.get("last_reset_date")):
         await db.reset_recovery_count(user_id)
-        await callback.message.edit_text(
-            "🔄 <b>Лимит восстановлений сброшен!</b>\n\n"
-            "Счётчик обнулён. Можно снова получать монеты при балансе 0.",
-            reply_markup=back_to_menu_kb(),
-            parse_mode="HTML"
+        await db.set_last_reset_date(user_id, get_today_msk())
+
+    await state.set_state(MainMenu.main)
+    welcome = await get_welcome_text()
+    await message.answer(welcome, reply_markup=main_menu_kb(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "check_subscribe")
+async def check_subscribe_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    user_id = callback.from_user.id
+    is_subscribed = await check_subscription(bot, user_id)
+
+    if is_subscribed:
+        await db.set_subscribed(user_id, True)
+        await db.update_username(user_id, callback.from_user.username or "", callback.from_user.first_name or "")
+
+        user = await db.get_user(user_id)
+        if user and should_reset_daily(user.get("last_reset_date")):
+            await db.reset_recovery_count(user_id)
+            await db.set_last_reset_date(user_id, get_today_msk())
+
+        await state.set_state(MainMenu.main)
+        welcome = await get_welcome_text()
+        await callback.message.edit_text(welcome, parse_mode="HTML")
+        await callback.message.answer(
+            "✅ Доступ открыт! Выбирай действие:",
+            reply_markup=main_menu_kb()
         )
-
-    elif item.startswith("coins"):
-        amount = int(item.split(":")[1])
-        await db.add_coins(user_id, amount, f"Покупка за {price} DC")
-        await callback.message.edit_text(
-            f"💰 <b>Монеты получены!</b>\n\n"
-            f"Добавлено: <b>{amount} монет</b>\n"
-            f"Списано: <b>{price} DC</b>",
-            reply_markup=back_to_menu_kb(),
-            parse_mode="HTML"
-        )
-
-    await callback.answer("✅ Покупка совершена!")
+    else:
+        await callback.answer("❌ Вы ещё не подписались на канал!", show_alert=True)
 
 
-@router.callback_query(F.data == "shop_back")
-async def shop_back(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ShopState.main)
-    user = await db.get_user(callback.from_user.id)
-    await callback.message.edit_text(
-        f"🛒 <b>Донат-магазин</b>\n\n"
-        f"💎 Ваш баланс: <b>{user['balance_donate']} DC</b>\n\n"
-        f"👑 <b>VIP Premium</b> — {VIP_PRICE} DC\n"
-        f"🔄 <b>Сброс лимита</b> — {RESET_LIMIT_PRICE} DC\n"
-        f"💰 <b>Покупка монет</b> — {COIN_PRICE_DC} DC = 1 монета",
-        reply_markup=shop_kb(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+@router.message(F.text == "🔙 В меню")
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu(event, state: FSMContext):
+    await state.set_state(MainMenu.main)
+    text = "🏠 <b>Главное меню</b>\n\nВыбирай действие, ковбой!"
+
+    if isinstance(event, CallbackQuery):
+        await event.message.edit_text(text, parse_mode="HTML")
+        await event.message.answer("👇", reply_markup=main_menu_kb())
+    else:
+        await event.answer(text, reply_markup=main_menu_kb(), parse_mode="HTML")
